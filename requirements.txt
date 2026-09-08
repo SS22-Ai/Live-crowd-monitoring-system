@@ -1,0 +1,15 @@
+# Event Crowd Monitor — dependencies
+# Target: macOS, Apple Silicon (M-series). Plain PyPI `torch` wheels for
+# macOS arm64 include Metal Performance Shaders (MPS) support built in —
+# no special index/URL needed.
+
+fastapi>=0.115
+uvicorn[standard]>=0.30
+ultralytics>=8.3.0
+torch>=2.2
+torchvision>=0.17
+opencv-python>=4.10
+numpy>=1.26
+pyyaml>=6.0
+lapx>=0.5.11
+python-multipart>=0.0.9

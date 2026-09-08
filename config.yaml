@@ -1,0 +1,53 @@
+# Event Crowd Monitor — configuration
+#
+# CAMERA 1 (event_entrance) uses your MacBook's built-in webcam (source: 0)
+# and is enabled by default so you can test immediately.
+#
+# CAMERA 2 (dining_entrance) is disabled until you have a second camera.
+# Flip `enabled: true` and set `source` (another webcam index, e.g. 1, or
+# an RTSP URL) once it's available. No code changes needed.
+
+app:
+  model_path: models/yolo11n.pt
+  model_confidence: 0.4
+  inference_width: 640
+  inference_height: 480
+  target_fps: 15
+  frame_skip: 0          # set to 1 or 2 on slower hardware to skip frames
+  db_path: data/crowd_monitor.db
+  log_path: logs/app.log
+  host: 0.0.0.0
+  port: 8000
+
+cameras:
+  - id: event_entrance
+    name: Event Entrance
+    source: 0                     # MacBook built-in webcam
+    enabled: true
+    line_position: 0.50           # vertical line at 50% of frame width
+    line_buffer: 20                # +/- 20px dead zone around the line
+    entry_direction: left_to_right
+    initial_occupancy: 0
+    reconnect_interval_seconds: 3.0
+    track_expiry_seconds: 2.0
+
+  - id: dining_entrance
+    name: Dining Entrance
+    source: 1                     # change to a real index or rtsp:// URL
+    enabled: false
+    line_position: 0.50
+    line_buffer: 20
+    entry_direction: left_to_right
+    initial_occupancy: 0
+    reconnect_interval_seconds: 3.0
+    track_expiry_seconds: 2.0
+
+  # Example RTSP camera (Phase 3), disabled by default:
+  # - id: dining_entrance
+  #   name: Dining Entrance
+  #   source: rtsp://username:password@192.168.1.50:554/stream1
+  #   enabled: true
+  #   line_position: 0.50
+  #   line_buffer: 20
+  #   entry_direction: left_to_right
+  #   initial_occupancy: 0

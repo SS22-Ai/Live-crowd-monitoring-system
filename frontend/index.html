@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Event Crowd Monitor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar__brand">
+    <span class="topbar__title">Event Crowd Monitor</span>
+    <span class="topbar__session" id="session-label">Session —</span>
+  </div>
+  <div class="topbar__actions">
+    <button class="btn btn--ghost" id="reset-btn">Reset counts</button>
+    <button class="btn btn--primary" id="new-session-btn">Start new session</button>
+  </div>
+</header>
+
+<main class="layout">
+  <section class="camera-grid" id="camera-grid">
+    <!-- camera panels injected by app.js -->
+  </section>
+
+  <section class="activity">
+    <h2 class="activity__heading">Recent activity</h2>
+    <ul class="activity__list" id="activity-list">
+      <li class="activity__empty">No crossings recorded yet.</li>
+    </ul>
+  </section>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
