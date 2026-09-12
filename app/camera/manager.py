@@ -20,6 +20,7 @@ from typing import Dict, Optional
 
 import cv2
 
+from app.camera.frame_reader import LatestFrameReader
 from app.camera.stream import CameraStream, CameraStatus
 from app.config import CameraConfig
 from app.database.database import Database
@@ -29,6 +30,15 @@ from app.vision.draw import draw_frame
 from app.vision.line_counter import LineCounter, EventType
 
 logger = logging.getLogger("crowd_monitor.camera_manager")
+
+
+def _live_capture_factory(source):
+    """The real (non-test) capture backend: a plain cv2.VideoCapture wrapped
+    in LatestFrameReader so RTSP staleness can't build up (see
+    app/camera/frame_reader.py). CameraStream itself is untouched — this is
+    injected only where cameras are actually constructed for real use, so
+    its own unit tests keep using a fake, fully synchronous capture."""
+    return LatestFrameReader(cv2.VideoCapture(source))
 
 
 @dataclass
@@ -65,6 +75,7 @@ class CameraPipeline:
             source=cfg.source,
             camera_id=cfg.id,
             reconnect_interval_seconds=cfg.reconnect_interval_seconds,
+            capture_factory=_live_capture_factory,
         )
         self.line_counter = LineCounter(
             frame_width=inference_width,
