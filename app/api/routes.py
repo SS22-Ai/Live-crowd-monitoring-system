@@ -6,6 +6,7 @@ the first working version robust before adding WebSocket push later.
 """
 from __future__ import annotations
 
+import asyncio
 import time
 from dataclasses import asdict
 from typing import Optional
@@ -81,9 +82,17 @@ def start_session(request: Request):
     return {"ok": True, "session_id": session_id}
 
 
-def _mjpeg_generator(pipeline):
+async def _mjpeg_generator(pipeline, request: Request):
+    """Yields one MJPEG frame at a time. Exits as soon as the client
+    disconnects, instead of looping forever — an MJPEG stream is a
+    long-lived request, and one that never notices the client is gone
+    keeps its connection "in flight" forever, which makes uvicorn's
+    graceful shutdown (which waits for in-flight requests to finish
+    before it will invoke the app's shutdown hook) hang indefinitely.
+    See run.py's timeout_graceful_shutdown for the bound that catches the
+    remaining case (client still connected when the server is stopped)."""
     boundary = b"--frame"
-    while True:
+    while not await request.is_disconnected():
         jpeg = pipeline.latest_jpeg()
         if jpeg is not None:
             yield (
@@ -91,16 +100,16 @@ def _mjpeg_generator(pipeline):
                 b"Content-Type: image/jpeg\r\n"
                 b"Content-Length: " + str(len(jpeg)).encode() + b"\r\n\r\n" + jpeg + b"\r\n"
             )
-        time.sleep(0.05)
+        await asyncio.sleep(0.05)
 
 
 @router.get("/video/{camera_id}")
-def video_feed(camera_id: str, request: Request):
+async def video_feed(camera_id: str, request: Request):
     manager = _manager(request)
     pipeline = manager.get(camera_id)
     if pipeline is None:
         raise HTTPException(status_code=404, detail=f"Unknown camera_id '{camera_id}'")
     return StreamingResponse(
-        _mjpeg_generator(pipeline),
+        _mjpeg_generator(pipeline, request),
         media_type="multipart/x-mixed-replace; boundary=frame",
     )
