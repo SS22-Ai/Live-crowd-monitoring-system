@@ -37,19 +37,20 @@ def is_uncached_frontend_path(path: str) -> bool:
 def resolve_startup_session(db) -> tuple[int, bool]:
     """Decide whether to resume the previous session or start a fresh one.
 
-    On a clean shutdown, on_shutdown() (below) always calls db.end_session(),
-    setting ended_at. If the most recent session still has ended_at=None,
-    the app never got there last time -- it crashed (or was force-killed).
-    In that case we reuse the SAME session id (instead of starting a new
-    one) so CameraManager can replay its already-recorded events and
-    resume live occupancy where it left off, rather than silently
-    resetting to zero. A clean previous stop, or the very first run,
-    starts a new session as before.
+    Data must survive ANY restart -- a clean stop, a crash, closing the
+    terminal, anything -- and only go back to zero when the user explicitly
+    clicks "Reset counts" or "Start new session" (see begin_fresh_session()
+    in app/api/routes.py, which is the only thing that actually closes a
+    session). So: if any session exists at all, resume it and replay its
+    counts, regardless of whether on_shutdown() got to run last time
+    (ended_at is now purely informational -- "when did the process last
+    stop", not a signal to start over). Only the very first run, with no
+    sessions in the database yet, starts a new one.
 
     Returns (session_id, resumed).
     """
     latest = db.latest_session()
-    if latest is not None and latest.ended_at is None:
+    if latest is not None:
         return latest.id, True
     return db.start_session(), False
 
@@ -129,9 +130,10 @@ def create_app() -> FastAPI:
     session_id, resumed = resolve_startup_session(db)
     session_state = {"session_id": session_id}
     if resumed:
-        logger.warning(
-            "Found an unclosed session id=%s (app likely crashed last time) — "
-            "resuming it; camera counts will be replayed from its recorded events",
+        logger.info(
+            "Resuming session id=%s from a previous run — camera counts will be "
+            "replayed from its recorded events. Use Reset counts / Start new "
+            "session on the dashboard to start over.",
             session_id,
         )
     else:

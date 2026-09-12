@@ -114,22 +114,33 @@ losing the live count on a crash mid-event.
 **Options considered:** (a) leave as-is; (b) on startup, replay
 `crossing_events` for the active session to rebuild occupancy; (c) a
 separate `occupancy_snapshots` table written every N seconds.
-**Decision: (b).** `app/main.py`'s `resolve_startup_session()` checks
-whether the most recent session's `ended_at` is still `NULL` (meaning the
-2026-09-12 shutdown-hook fix, D12, never got to run last time — a crash).
-If so, that same session is reused and `CameraManager` (via its new
-`resume_session_id` param) replays each camera's ENTRY/EXIT counts from
-`crossing_events` using the existing `db.count_events()`. A clean
-previous stop, or the first-ever run, still starts a fresh session at 0,
-same as before — this is unchanged and correct for an intentional new
-day/event.
-**No new table added** — (c) was rejected as unnecessary complexity once
-(b) covers the actual failure mode (a crash), which is what mattered.
-**Verified live:** injected events, `SIGKILL`ed the process (real crash,
-no clean shutdown), restarted — occupancy resumed exactly, not reset to
-0. A clean `SIGTERM` stop followed by restart correctly started fresh.
-5 new automated tests in `tests/test_session_resume.py`. Full suite
-80/80.
+**Decision: (b), then broadened same day.** First cut (`d464df2`):
+`app/main.py`'s `resolve_startup_session()` only resumed when the most
+recent session's `ended_at` was `NULL` (a crash) — a clean stop still
+started fresh at 0, on the assumption that an intentional stop meant an
+intentional new day/event.
+**Broadened per explicit request (same day):** that assumption was
+wrong for how this is actually used — data must survive *any* restart,
+clean or not, and only reset via an explicit action. `resolve_startup_session()`
+now ignores `ended_at` entirely and always resumes the latest session if
+one exists at all; `ended_at` is kept purely as "when did the process
+last stop" telemetry, no longer load-bearing for the resume decision.
+The only things that actually zero counts now are `POST /api/reset` and
+`POST /api/session/start`, both routed through the new
+`begin_fresh_session()` (`app/api/routes.py`) — it closes the current
+session and opens a new one, so a *subsequent* restart resumes the new
+(zeroed) session instead of replaying the pre-reset numbers back. Without
+this, a plain in-memory reset would have been silently undone by the next
+restart.
+**No new table added** — (c) was rejected as unnecessary complexity;
+replaying `crossing_events` from the current session covers every
+restart scenario that actually matters.
+**Verified live (both revisions):** crash (`SIGKILL`) resumes correctly;
+a clean `SIGTERM` stop now *also* resumes correctly (previously it didn't
+— confirmed by reproducing the old behavior first, then the fix); and
+`POST /api/reset` followed by a restart correctly stays at zero rather
+than replaying the old session. 9 automated tests in
+`tests/test_session_resume.py`. Full suite 91/91.
 
 ### D12 — SIGTERM does not run the FastAPI shutdown hook (FIXED 2026-09-12, `cc2bf39`)
 **Observed 2026-09-08:** killing `run.py` with SIGTERM does not invoke

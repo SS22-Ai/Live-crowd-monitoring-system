@@ -1,18 +1,23 @@
 """
-Regression tests for crash-recovery session resume (P0, added 2026-09-12).
+Regression tests for session persistence across restarts (P0, added
+2026-09-12; broadened 2026-09-12 per explicit request).
 
 The gap: on every startup, the app used to unconditionally start a brand
-new session (db.start_session()), so if the process crashed instead of
-shutting down cleanly, the live occupancy count silently reset to 0 on
-restart even though the crossing_events for the people still inside were
-safely sitting in the database the whole time.
+new session (db.start_session()), so any restart -- a crash, or even just
+stopping and starting it again on purpose -- silently reset live occupancy
+to 0, even though the crossing_events were safely sitting in the database
+the whole time.
 
-The fix distinguishes "the app crashed last time" from "this is a clean
-restart / first run" using the same ended_at column the shutdown hook
-already writes: a session whose ended_at is still NULL at startup means
-on_shutdown() never ran last time. app/main.py's resolve_startup_session()
-makes that decision; app/camera/manager.py's CameraManager replays the
-resumed session's recorded events back into each camera's counters.
+The fix: data now persists across EVERY restart, clean or not.
+app/main.py's resolve_startup_session() always resumes the most recent
+session (if any exists at all) rather than only resuming after a crash;
+app/camera/manager.py's CameraManager replays that session's recorded
+events back into each camera's counters. The ONLY thing that actually
+resets counts for good is an explicit user action -- POST /api/reset or
+POST /api/session/start, both of which now go through
+app/api/routes.py's begin_fresh_session(): it closes the current session
+and opens a new one, so a later restart resumes the NEW (zeroed) session
+instead of replaying the old numbers back.
 
 Uses a real temporary SQLite Database (same pattern as
 test_integration_pipeline.py) and a FakeDetector factory (same pattern as
@@ -27,6 +32,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from app.api.routes import begin_fresh_session  # noqa: E402
 from app.camera.manager import CameraManager  # noqa: E402
 from app.config import CameraConfig  # noqa: E402
 from app.database.database import Database  # noqa: E402
@@ -62,16 +68,20 @@ class ResolveStartupSessionTest(unittest.TestCase):
         self.assertFalse(resumed)
         self.assertIsNotNone(session_id)
 
-    def test_clean_previous_stop_starts_a_new_session(self):
+    def test_clean_previous_stop_still_resumes(self):
+        """Data must persist across an ORDINARY restart too, not just a
+        crash -- the user only wants counts to reset via an explicit
+        Reset counts / Start new session action (see begin_fresh_session),
+        never just because the process was stopped and started again."""
         old_id = self.db.start_session()
         self.db.end_session(old_id)  # simulates the shutdown hook running normally
 
         session_id, resumed = resolve_startup_session(self.db)
 
-        self.assertFalse(resumed)
-        self.assertNotEqual(session_id, old_id, "a cleanly-closed session must not be reused")
+        self.assertTrue(resumed)
+        self.assertEqual(session_id, old_id, "a cleanly-closed session must still be reused on restart")
 
-    def test_crash_resumes_the_unclosed_session(self):
+    def test_crash_also_resumes_the_unclosed_session(self):
         old_id = self.db.start_session()
         # no end_session() call -- simulates a crash / force-kill
 
@@ -80,7 +90,7 @@ class ResolveStartupSessionTest(unittest.TestCase):
         self.assertTrue(resumed)
         self.assertEqual(session_id, old_id)
 
-    def test_repeated_crashes_keep_resuming_the_same_session(self):
+    def test_repeated_restarts_keep_resuming_the_same_session(self):
         old_id = self.db.start_session()
 
         first_id, first_resumed = resolve_startup_session(self.db)
@@ -148,6 +158,78 @@ class CameraManagerResumeTest(unittest.TestCase):
         pipeline = manager.pipelines["event_entrance"]
         self.assertEqual(pipeline.line_counter.entries, 0)
         self.assertEqual(pipeline.occupancy.live_occupancy, 0)
+
+
+class BeginFreshSessionTest(unittest.TestCase):
+    """begin_fresh_session() backs both POST /api/reset and
+    POST /api/session/start -- it's the only thing that makes a reset
+    stick across a later restart."""
+
+    def setUp(self):
+        self.db = make_temp_db()
+
+    def tearDown(self):
+        self.db.close()
+
+    def _manager_with_history(self, session_id):
+        for _ in range(4):
+            self.db.record_event(session_id, "event_entrance", track_id=1, event_type="ENTRY")
+        return CameraManager(
+            camera_configs=make_camera_configs(),
+            detector_factory=FakeDetector,
+            db=self.db,
+            session_id_getter=lambda: session_id,
+            inference_width=640,
+            inference_height=480,
+            resume_session_id=session_id,
+        )
+
+    def test_closes_the_old_session_and_opens_a_new_one(self):
+        old_id = self.db.start_session()
+        manager = self._manager_with_history(old_id)
+        session_state = {"session_id": old_id}
+
+        new_id = begin_fresh_session(self.db, session_state, manager)
+
+        self.assertNotEqual(new_id, old_id)
+        self.assertEqual(session_state["session_id"], new_id)
+        old_record = self.db.get_session(old_id)
+        self.assertIsNotNone(old_record.ended_at, "the old session must be marked closed")
+
+    def test_resets_every_camera_counter_to_zero(self):
+        old_id = self.db.start_session()
+        manager = self._manager_with_history(old_id)
+        self.assertEqual(manager.pipelines["event_entrance"].line_counter.entries, 4)  # sanity check
+
+        begin_fresh_session(self.db, {"session_id": old_id}, manager)
+
+        pipeline = manager.pipelines["event_entrance"]
+        self.assertEqual(pipeline.line_counter.entries, 0)
+        self.assertEqual(pipeline.occupancy.live_occupancy, 0)
+
+    def test_a_later_restart_resumes_the_new_zeroed_session_not_the_old_numbers(self):
+        """End-to-end guard for the actual user complaint: after Reset
+        counts, restarting the app must NOT bring the old numbers back."""
+        old_id = self.db.start_session()
+        manager = self._manager_with_history(old_id)
+        session_state = {"session_id": old_id}
+
+        new_id = begin_fresh_session(self.db, session_state, manager)
+
+        resumed_id, resumed = resolve_startup_session(self.db)
+        self.assertTrue(resumed)
+        self.assertEqual(resumed_id, new_id, "restart after a reset must resume the NEW session, not the old one")
+
+        fresh_manager = CameraManager(
+            camera_configs=make_camera_configs(),
+            detector_factory=FakeDetector,
+            db=self.db,
+            session_id_getter=lambda: resumed_id,
+            inference_width=640,
+            inference_height=480,
+            resume_session_id=resumed_id,
+        )
+        self.assertEqual(fresh_manager.pipelines["event_entrance"].line_counter.entries, 0)
 
 
 if __name__ == "__main__":

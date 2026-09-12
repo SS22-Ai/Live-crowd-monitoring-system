@@ -7,12 +7,15 @@ the first working version robust before adding WebSocket push later.
 from __future__ import annotations
 
 import asyncio
+import csv
+import io
 import time
 from dataclasses import asdict
+from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 router = APIRouter()
 
@@ -64,21 +67,38 @@ def get_events(request: Request, camera_id: Optional[str] = None, limit: int = 1
     return {"events": [asdict(e) for e in events]}
 
 
+def begin_fresh_session(db, session_state: dict, manager) -> int:
+    """The ONLY thing that actually zeroes counts for good.
+
+    Data now persists across every ordinary restart (see
+    app/main.py's resolve_startup_session — it always resumes the latest
+    session). So a plain in-memory reset isn't enough on its own: without
+    also closing the old session and opening a new one, the next restart
+    would resume-replay the pre-reset numbers right back. Ends the current
+    session (records when it was closed), starts a brand-new one, points
+    session_state at it, and resets every camera's live counters.
+
+    Used by both POST /api/reset and POST /api/session/start — from a
+    persistence standpoint they need to do the exact same thing.
+    """
+    old_session_id = session_state.get("session_id")
+    if old_session_id is not None:
+        db.end_session(old_session_id)
+    new_session_id = db.start_session()
+    session_state["session_id"] = new_session_id
+    manager.reset_all()
+    return new_session_id
+
+
 @router.post("/api/reset")
 def reset_counts(request: Request):
-    manager = _manager(request)
-    manager.reset_all()
+    begin_fresh_session(_db(request), _session_state(request), _manager(request))
     return {"ok": True, "message": "Counters reset for all cameras"}
 
 
 @router.post("/api/session/start")
 def start_session(request: Request):
-    db = _db(request)
-    session_state = _session_state(request)
-    session_id = db.start_session()
-    session_state["session_id"] = session_id
-    manager = _manager(request)
-    manager.reset_all()
+    session_id = begin_fresh_session(_db(request), _session_state(request), _manager(request))
     return {"ok": True, "session_id": session_id}
 
 
@@ -145,13 +165,13 @@ def bucket_events_by_interval(events, session_started_at, now, interval_minutes,
     return buckets
 
 
-@router.get("/api/reports/interval")
-def get_interval_report(request: Request, interval_minutes: int = 30):
-    db = _db(request)
-    session_state = _session_state(request)
-    manager = _manager(request)
+def build_interval_report(db, session_state: dict, manager, interval_minutes: int) -> dict:
+    """Shared by the JSON (/api/reports/interval) and CSV
+    (/api/reports/interval.csv) endpoints. Covers the entire current
+    session -- from session_started_at to now -- which, since sessions now
+    persist across ordinary restarts (see resolve_startup_session), is
+    exactly "the whole time since the last manual reset"."""
     session_id = session_state.get("session_id")
-
     session = db.get_session(session_id) if session_id is not None else None
     if session is None:
         return {"interval_minutes": interval_minutes, "session_id": session_id, "cameras": {}}
@@ -172,6 +192,38 @@ def get_interval_report(request: Request, interval_minutes: int = 30):
         "generated_at": now,
         "cameras": cameras,
     }
+
+
+@router.get("/api/reports/interval")
+def get_interval_report(request: Request, interval_minutes: int = 30):
+    return build_interval_report(_db(request), _session_state(request), _manager(request), interval_minutes)
+
+
+@router.get("/api/reports/interval.csv")
+def get_interval_report_csv(request: Request, interval_minutes: int = 30):
+    report = build_interval_report(_db(request), _session_state(request), _manager(request), interval_minutes)
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["camera_id", "camera_name", "window_start", "window_end", "entries", "exits", "occupancy_at_end"])
+    for camera_id, cam in report["cameras"].items():
+        for b in cam["buckets"]:
+            writer.writerow([
+                camera_id,
+                cam["name"],
+                datetime.fromtimestamp(b["start"]).isoformat(sep=" ", timespec="seconds"),
+                datetime.fromtimestamp(b["end"]).isoformat(sep=" ", timespec="seconds"),
+                b["entries"],
+                b["exits"],
+                b["occupancy_at_end"],
+            ])
+
+    filename = f"crowd_report_session{report.get('session_id')}_{interval_minutes}min.csv"
+    return Response(
+        content=output.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 async def _mjpeg_generator(pipeline, request: Request):

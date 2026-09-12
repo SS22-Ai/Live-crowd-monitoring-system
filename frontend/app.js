@@ -238,6 +238,11 @@ async function loadReport() {
   const generatedEl = document.getElementById("report-generated");
   const intervalMinutes = document.getElementById("report-interval").value;
 
+  // Plain <a href download> — the browser handles the download natively
+  // from the server's Content-Disposition header, no JS blob-juggling needed.
+  document.getElementById("report-download-link").href =
+    `/api/reports/interval.csv?interval_minutes=${intervalMinutes}`;
+
   content.innerHTML = `<p class="activity__empty">Loading report…</p>`;
   try {
     const res = await fetch(`/api/reports/interval?interval_minutes=${intervalMinutes}`);
