@@ -106,28 +106,51 @@ torch; nothing permanent exercised the real inference or the counting→DB wirin
 
 ## 2026-09-08 — open questions surfaced during deployment tracking
 
-### D11 — Occupancy is derived-only and not persisted (OPEN — needs your call)
-**Current behaviour:** `OccupancyManager` lives in memory. The DB stores
-`sessions` + `crossing_events` only — there is **no occupancy table**. On
-restart, occupancy recomputes from `initial_occupancy` (0) for a *new* session;
-it does **not** replay the previous session's events.
-**Implication for the checklist:** DEPLOYMENT_STATUS Phase 6 "Occupancy records"
-= `[ ]`, Phase 5 "Restart/recovery behavior" = `[~]`.
-**Options:**
-(a) leave as-is — occupancy is a per-session live counter, restart = fresh count (simplest; fine if the app runs for the whole event);
-(b) on startup, replay `crossing_events` for the active session to rebuild occupancy (crash-recovery within a session);
-(c) add an `occupancy_snapshots` table written every N seconds (history + fast recovery).
-**Not decided.** Blocking "deployment-ready" until chosen.
+### D11 — Occupancy is derived-only, not persisted as its own table (RESOLVED 2026-09-12 — option (b) chosen)
+**Original problem:** `OccupancyManager` lives in memory only. The DB stores
+`sessions` + `crossing_events`, no `occupancy` table. On restart, occupancy
+used to recompute from `initial_occupancy` (0) unconditionally, silently
+losing the live count on a crash mid-event.
+**Options considered:** (a) leave as-is; (b) on startup, replay
+`crossing_events` for the active session to rebuild occupancy; (c) a
+separate `occupancy_snapshots` table written every N seconds.
+**Decision: (b).** `app/main.py`'s `resolve_startup_session()` checks
+whether the most recent session's `ended_at` is still `NULL` (meaning the
+2026-09-12 shutdown-hook fix, D12, never got to run last time — a crash).
+If so, that same session is reused and `CameraManager` (via its new
+`resume_session_id` param) replays each camera's ENTRY/EXIT counts from
+`crossing_events` using the existing `db.count_events()`. A clean
+previous stop, or the first-ever run, still starts a fresh session at 0,
+same as before — this is unchanged and correct for an intentional new
+day/event.
+**No new table added** — (c) was rejected as unnecessary complexity once
+(b) covers the actual failure mode (a crash), which is what mattered.
+**Verified live:** injected events, `SIGKILL`ed the process (real crash,
+no clean shutdown), restarted — occupancy resumed exactly, not reset to
+0. A clean `SIGTERM` stop followed by restart correctly started fresh.
+5 new automated tests in `tests/test_session_resume.py`. Full suite
+80/80.
 
-### D12 — SIGTERM does not run the FastAPI shutdown hook (BUG — fix planned)
+### D12 — SIGTERM does not run the FastAPI shutdown hook (FIXED 2026-09-12, `cc2bf39`)
 **Observed 2026-09-08:** killing `run.py` with SIGTERM does not invoke
 `@app.on_event("shutdown")`, so `db.end_session()` and `manager.stop_all()`
-don't run; sessions are left with `ended_at = NULL`.
-**Impact:** cosmetic for data integrity (events are committed as they occur),
-but camera threads aren't joined and sessions never close cleanly — bad for a
-long-running deployment.
-**Decision:** replace the deprecated `@app.on_event("startup"/"shutdown")` with
-a `lifespan=` async context manager on the FastAPI app; move
-`prime_camera_permissions` + `CameraManager` start into its enter phase and
-`stop_all()` + `end_session()` into its exit phase; ensure uvicorn is run so it
-propagates SIGTERM/SIGINT to lifespan shutdown. Tracked in TODO.
+don't run; sessions are left with `ended_at = NULL`; the process needed
+`SIGKILL`.
+**Root cause (found 2026-09-12, not what was assumed on 2026-09-08):** it
+was never about `@app.on_event` being deprecated — the real cause was
+`/video/{camera_id}`'s MJPEG generator (`while True: ... time.sleep(0.05)`,
+no exit condition). uvicorn's graceful shutdown waits for all in-flight
+requests to finish *before* it calls the ASGI shutdown event at all, and
+that streaming request never finished on its own, so the shutdown hook —
+`@app.on_event` or a `lifespan=` manager, either would have had the same
+problem — never got invoked.
+**Actual fix (simpler than the lifespan-migration originally planned
+above):** `app/api/routes.py`'s `_mjpeg_generator` now checks
+`await request.is_disconnected()` each cycle, so it exits once a client
+actually leaves; `run.py` sets `timeout_graceful_shutdown=5` on
+`uvicorn.run()` as a bound for the remaining case (client still connected
+at shutdown time). `@app.on_event("shutdown")` was kept as-is — no
+lifespan migration was needed once the actual blocker was fixed.
+**Verified live twice:** with an open `/video/` stream, and without one —
+both exit in ~5-6s on a plain `kill`/Ctrl+C, no `SIGKILL`, `ended_at`
+written. 5 new tests in `tests/test_video_feed_shutdown.py`.

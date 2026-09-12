@@ -26,12 +26,10 @@ _Last updated: 2026-09-08_
 
 ## CODE — decisions to make (see DECISIONS D11/D12)
 
-- [ ] **D11:** choose occupancy persistence model — (a) keep derived-only,
-      (b) replay events on startup for crash recovery, (c) `occupancy_snapshots`
-      table. Then implement + test restart behaviour.  *(Phase 5/6)*
-- [ ] **D12:** replace `@app.on_event("startup"/"shutdown")` with a `lifespan`
-      handler so SIGTERM cleanly runs `stop_all()` + `end_session()` and joins
-      camera threads. Re-test the restart/shutdown path.  *(Phase 11)*
+- [x] **D11:** RESOLVED 2026-09-12 — crash-recovery via session resume,
+      implemented + verified live. See `DECISIONS.md`.
+- [x] **D12:** RESOLVED 2026-09-12 — real root cause was the MJPEG stream,
+      not `@app.on_event`; fixed without a lifespan migration. See `DECISIONS.md`.
 
 ## CODE — features not yet built
 
