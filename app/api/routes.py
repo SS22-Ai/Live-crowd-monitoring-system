@@ -82,6 +82,98 @@ def start_session(request: Request):
     return {"ok": True, "session_id": session_id}
 
 
+MAX_REPORT_BUCKETS = 1000  # safety cap: bounds response size / processing time
+                           # for a pathologically small interval over a long session
+
+
+def bucket_events_by_interval(events, session_started_at, now, interval_minutes, initial_occupancy):
+    """Pure bucketing logic behind /api/reports/interval — no DB/HTTP
+    involved, so it's directly unit-testable.
+
+    `events`: iterable of objects/dicts with .timestamp/["timestamp"] and
+    .event_type/["event_type"] ('ENTRY' or 'EXIT'), any order.
+    Returns a list of {start, end, entries, exits, occupancy_at_end} dicts
+    covering [session_started_at, now) in interval_minutes-wide windows.
+    occupancy_at_end is the running total through the end of that window,
+    using the same max(0, initial + entries - exits) formula as live
+    occupancy (app/occupancy/manager.py) — this is a historical
+    reconstruction from stored events, not a new stored value.
+    """
+    interval_minutes = max(1, interval_minutes)
+    interval_seconds = interval_minutes * 60
+
+    def ts(e):
+        return e["timestamp"] if isinstance(e, dict) else e.timestamp
+
+    def etype(e):
+        return e["event_type"] if isinstance(e, dict) else e.event_type
+
+    events_sorted = sorted(events, key=ts)
+
+    bucket_starts = []
+    t = session_started_at
+    while t < now and len(bucket_starts) < MAX_REPORT_BUCKETS:
+        bucket_starts.append(t)
+        t += interval_seconds
+    if not bucket_starts:
+        bucket_starts = [session_started_at]
+
+    buckets = []
+    cum_entries = 0
+    cum_exits = 0
+    idx = 0
+    n = len(events_sorted)
+    for b_start in bucket_starts:
+        b_end = b_start + interval_seconds
+        bucket_entries = 0
+        bucket_exits = 0
+        while idx < n and ts(events_sorted[idx]) < b_end:
+            if etype(events_sorted[idx]) == "ENTRY":
+                bucket_entries += 1
+                cum_entries += 1
+            else:
+                bucket_exits += 1
+                cum_exits += 1
+            idx += 1
+        buckets.append({
+            "start": b_start,
+            "end": b_end,
+            "entries": bucket_entries,
+            "exits": bucket_exits,
+            "occupancy_at_end": max(0, initial_occupancy + cum_entries - cum_exits),
+        })
+    return buckets
+
+
+@router.get("/api/reports/interval")
+def get_interval_report(request: Request, interval_minutes: int = 30):
+    db = _db(request)
+    session_state = _session_state(request)
+    manager = _manager(request)
+    session_id = session_state.get("session_id")
+
+    session = db.get_session(session_id) if session_id is not None else None
+    if session is None:
+        return {"interval_minutes": interval_minutes, "session_id": session_id, "cameras": {}}
+
+    now = time.time()
+    cameras = {}
+    for camera_id, pipeline in manager.pipelines.items():
+        events = db.get_events(session_id=session_id, camera_id=camera_id, limit=100000)
+        buckets = bucket_events_by_interval(
+            events, session.started_at, now, interval_minutes, pipeline.cfg.initial_occupancy
+        )
+        cameras[camera_id] = {"name": pipeline.cfg.name, "buckets": buckets}
+
+    return {
+        "interval_minutes": max(1, interval_minutes),
+        "session_id": session_id,
+        "session_started_at": session.started_at,
+        "generated_at": now,
+        "cameras": cameras,
+    }
+
+
 async def _mjpeg_generator(pipeline, request: Request):
     """Yields one MJPEG frame at a time. Exits as soon as the client
     disconnects, instead of looping forever — an MJPEG stream is a

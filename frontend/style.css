@@ -141,10 +141,55 @@ body {
   color: var(--live);
 }
 
+.tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.tab-btn {
+  font-family: inherit;
+  font-size: 0.9rem;
+  font-weight: 500;
+  padding: 10px 18px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transform: translateY(1px);
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.tab-btn:hover { color: var(--text); }
+
+.tab-btn.is-active {
+  color: var(--text);
+  border-bottom-color: var(--live);
+}
+
+.tab-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+/* Without this, the [hidden] attribute's default display:none loses to
+   the .tab-panel rule above (same specificity, author style wins over the
+   UA default) and a "hidden" panel still renders, stacked under the
+   visible one. */
+.tab-panel[hidden] {
+  display: none;
+}
+
 .camera-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
   gap: 20px;
+}
+
+.camera-grid--overview {
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
 }
 
 .camera-panel {
@@ -337,6 +382,79 @@ body {
   opacity: 1;
   transform: translate(-50%, 0);
 }
+
+.reports-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.reports-toolbar__label {
+  font-size: 0.82rem;
+  color: var(--text-dim);
+}
+
+.select {
+  font-family: inherit;
+  font-size: 0.88rem;
+  padding: 8px 12px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+}
+
+.reports-toolbar__generated {
+  margin-left: auto;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  font-family: "IBM Plex Mono", monospace;
+}
+
+.report-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px 20px;
+  margin-bottom: 20px;
+}
+
+.report-card__heading {
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin: 0 0 12px;
+}
+
+.report-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.86rem;
+}
+
+.report-table th {
+  text-align: left;
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.report-table td {
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--border);
+  font-family: "IBM Plex Mono", monospace;
+}
+
+.report-table tr:last-child td { border-bottom: none; }
+.report-table tr:hover td { background: var(--panel-2); }
+
+.report-table .num { text-align: right; }
+.report-table .num--entry { color: var(--live); }
+.report-table .num--exit { color: var(--alert); }
+.report-table .num--occ { color: var(--text); font-weight: 600; }
 
 @media (max-width: 520px) {
   .topbar { padding: 14px 16px; }
