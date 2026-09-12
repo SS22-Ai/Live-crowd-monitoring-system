@@ -1,8 +1,10 @@
 # Event Crowd Monitor — Developer Handover
 
-_Last updated: 2026-09-12. If you're picking this project up cold, read this
-whole file before touching code — it will save you from re-discovering
-things the hard way._
+_Last updated: 2026-09-12 (end of day — session persistence model, dashboard
+redesign, and CSV reports were all added in the final hour; read §7, §9, §10
+and §14 even if you've seen this file before). If you're picking this
+project up cold, read this whole file before touching code — it will save
+you from re-discovering things the hard way._
 
 ---
 
@@ -272,14 +274,31 @@ live_occupancy = max(0, initial_occupancy + entries - exits)
   wrong initial value).
 - Each camera has its **own** `OccupancyManager` — occupancy for
   `event_entrance` and `dining_entrance` are entirely independent counts.
-- **Important limitation:** occupancy is **derived and in-memory only** —
-  there is no `occupancy` table in the database. On restart, a new
-  session starts and occupancy recomputes from `initial_occupancy` (0 by
-  default); it does **not** replay the previous session's events. This
-  is an open, undecided design question — see `DECISIONS.md` D11.
+- **Persists across every restart — clean stop, crash, anything.** There
+  is still no `occupancy` table (no new table was needed); instead, on
+  startup `app/main.py`'s `resolve_startup_session()` always resumes the
+  most recent session (if one exists at all) and `CameraManager` replays
+  its `crossing_events` back into each camera's counters via
+  `db.count_events()`. This was explicitly requested and changed **twice**
+  the same day (`DECISIONS.md` D11): first cut only resumed after a
+  crash; broadened a few hours later so an *ordinary* stop/restart also
+  resumes, because that's what's actually needed for a real event
+  (someone closing the terminal to check something shouldn't lose the
+  count).
+- **The only thing that actually resets counts to zero for good** is
+  clicking **Reset counts** or **Start new session** on the dashboard —
+  both go through `begin_fresh_session()` in `app/api/routes.py`, which
+  closes the current DB session and opens a new one. This matters:
+  without closing the old session, a plain in-memory reset would be
+  silently undone the next time the app restarts and replays the old
+  (pre-reset) session's events back in. If you ever touch reset/session
+  logic, keep this in mind or resets will "come back from the dead."
 
-Verified: 7 unit tests + the integration tests above; live via
-`GET /api/occupancy`.
+Verified live (not just tests): injected events, did a **clean** `SIGTERM`
+stop (not a crash) → restart → counts persisted, not reset. Then hit
+`POST /api/reset` → counts went to 0 and stayed at 0 through *another*
+restart (confirming the reset actually stuck). 9 tests in
+`tests/test_session_resume.py`; live via `GET /api/occupancy`.
 
 ---
 
@@ -312,13 +331,19 @@ crossing_events(
 - `track_id` is meaningless outside the process that generated it —
   ByteTrack can and will reuse small integers across different real
   people once old tracks expire.
-- A new `sessions` row is created every time the app starts, and every
-  time someone clicks "Start new session" on the dashboard
-  (`POST /api/session/start`).
+- A new `sessions` row is created on the **very first run ever** (empty
+  database), and every time someone clicks **Reset counts** or **Start
+  new session** on the dashboard. An ordinary app restart does **not**
+  create a new row — it resumes the existing one (see §7). `ended_at` is
+  therefore no longer "when the process last stopped" in a meaningful
+  sense — it's `NULL` for whatever session is currently active (may have
+  survived several restarts) and set only once a human explicitly closes
+  it via Reset/New session.
 
 Verified: 8 unit tests against a real temp SQLite file; live persistence
-across a real restart (2026-09-08); live clean session-close via
-`ended_at` after the 2026-09-12 shutdown fix.
+across a real restart (2026-09-08, broadened 2026-09-12 to cover clean
+restarts too — see §7); live clean session-close via `ended_at` after the
+2026-09-12 shutdown fix.
 
 ---
 
@@ -332,8 +357,10 @@ All defined in `app/api/routes.py`.
 | `/api/cameras` | GET | Same per-camera stats, without the app-level wrapper |
 | `/api/occupancy` | GET | Per-camera occupancy snapshot |
 | `/api/events` | GET | Recent crossing events. Query params: `?camera_id=&limit=` |
-| `/api/reset` | POST | Resets all cameras' counters (keeps camera config) |
-| `/api/session/start` | POST | Starts a new DB session and resets all counters |
+| `/api/reset` | POST | Closes the current session, opens a new one, resets all counters (see §7 — this is the ONLY durable reset) |
+| `/api/session/start` | POST | Same underlying action as `/api/reset` (both call `begin_fresh_session()`) — kept as a separate labeled button/endpoint |
+| `/api/reports/interval` | GET | `?interval_minutes=15\|30\|60` (default 30). Buckets the *entire current session* into N-minute windows; per camera: entries, exits, occupancy at the end of that window. Computed from `crossing_events`, nothing new stored. |
+| `/api/reports/interval.csv` | GET | Same data as above, as a CSV file download (`Content-Disposition: attachment`) — this is the "download the whole-time report" feature. |
 | `/video/{camera_id}` | GET | MJPEG live annotated stream (`multipart/x-mixed-replace`). 404 if `camera_id` is unknown |
 
 - No `/health` endpoint exists — `/api/status` doubles as a liveness check.
@@ -351,23 +378,44 @@ Verified: every endpoint has been hit live repeatedly this project
 ## 10. Dashboard
 
 `frontend/index.html` + `app.js` + `style.css`, served at `/` and `/static/*`.
+Redesigned into **three tabs** on 2026-09-12 (was a single mixed grid before):
 
-- **Top bar**: title, current session label, "Reset counts" and "Start
-  new session" buttons (call `/api/reset` and `/api/session/start`).
-- **Summary bar** (added 2026-09-12, computed client-side in `app.js`
-  from `/api/status` — no dedicated backend endpoint):
-  - **"Total crowd inside event area"** = `event_entrance.live_occupancy − dining_entrance.entries`, clamped at 0. The idea: someone who walked from the main area into dining is no longer "in the event area," even though they were originally counted as an ENTRY there.
-  - **"Total crowd inside dining"** = `dining_entrance.entries` directly.
-  - This math is hardcoded to those two specific camera IDs — if you
-    rename or add more cameras, `updateSummary()` in `app.js` needs updating.
-- **One panel per camera**: live MJPEG video (with the counting line,
-  bounding boxes, and track IDs burned into the image server-side by
-  `draw.py`), an ONLINE/OFFLINE/RECONNECTING status pill, and
-  Live Crowd / Entry / Exit numbers.
-- **Recent activity list**: the last ~15 crossing events, polled every 2s.
+- **Top bar** (always visible): title, current session label, "Reset counts"
+  and "Start new session" buttons.
+- **Summary bar** (always visible, above the tabs): "Total crowd inside
+  event area" (`event_entrance.live_occupancy − dining_entrance.entries`,
+  clamped at 0 — someone who walked into dining is no longer "in the event
+  area") and "Total crowd inside dining" (`dining_entrance.entries`). Both
+  computed client-side in `app.js` from `/api/status`. **Hardcoded to
+  those two specific camera IDs** — rename/add cameras and `updateSummary()`
+  needs updating.
+- **Overview tab** (default): numbers only, no video — per-camera status
+  pill + Live Crowd / Entry / Exit. This is what most people watching the
+  dashboard actually want.
+- **Preview tab**: video only, no numbers — per-camera live MJPEG feed
+  (counting line/boxes/IDs burned in server-side by `draw.py`) + status pill.
+- **Reports tab**: a 15/30/60-minute interval breakdown table per camera
+  (from `/api/reports/interval`), a Refresh button, and a **Download CSV**
+  link (`/api/reports/interval.csv`) covering the whole current session.
+  Loaded on-demand (tab open / Refresh / interval change) — not polled
+  continuously, since it's a look-back report, not a live view.
+- **Recent activity list** (under Overview): the last ~15 crossing events,
+  polled every 2s.
 
-Verified: renders correctly, polls correctly, buttons work, zero JS
-console errors — all confirmed in-browser, including with a real RTSP
+**A real CSS bug was found and fixed while building this — worth knowing
+about if tabs ever misbehave again:** `.tab-panel { display: flex }` was
+silently overriding the `[hidden]` attribute's `display: none` (same CSS
+specificity; an author rule beats the browser's own default for `[hidden]`).
+Result: switching tabs updated the JS/DOM state correctly but **both
+panels stayed visually stacked on screen**. Fixed with an explicit
+`.tab-panel[hidden] { display: none; }` override in `style.css`. If you
+ever add a new `display`-setting rule targeting `.tab-panel` (or any
+`[hidden]` element), re-add a matching `[hidden]` override or this comes back.
+
+Verified: renders correctly, polls correctly, buttons work, tab switching
+confirmed correct in the browser (all three tabs, plus the interval
+selector triggering a re-fetch and the CSV download producing correct
+headers/content), zero JS console errors — including with a real RTSP
 feed. `Cache-Control: no-store` (added 2026-09-12) means a frontend edit
 always shows up on a normal refresh, no more stale-cache confusion.
 
@@ -376,7 +424,7 @@ always shows up on a normal refresh, no more stale-cache confusion.
 ## 11. Testing
 
 ```bash
-# the whole suite — 74 tests, fast, no camera/model needed for 70 of them
+# the whole suite — 91 tests, fast, no camera/model needed for 87 of them
 .venv/bin/python -m unittest discover -s tests -v
 
 # a single file
@@ -396,6 +444,8 @@ always shows up on a normal refresh, no more stale-cache confusion.
 | `test_main_frontend_caching.py` | 5 | No-cache middleware predicate | No |
 | `test_video_feed_shutdown.py` | 5 | MJPEG generator stops on disconnect (shutdown fix) | No |
 | `test_frame_reader.py` | 5 | RTSP staleness fix (`LatestFrameReader`) | No |
+| `test_session_resume.py` | 9 | Resume-on-restart + `begin_fresh_session` reset durability (§7) | No |
+| `test_interval_report.py` | 8 | 30-min bucketing math for `/api/reports/interval` | No |
 
 **What automated tests do NOT cover (manual testing required):**
 - Anything needing a real physical person: a deliberate walk-through
@@ -473,6 +523,18 @@ for the honest distinction on every feature.
   deleting it is safe (loses history, not code).
 - If you need a clean slate: stop the app, delete the `.db` file, restart.
 
+**"[Errno 48] address already in use" on startup**
+- Something is already listening on port 8000 — almost always a previous
+  `run.py` you (or an assistant/tool) forgot to stop, not a real bug.
+  ```bash
+  lsof -ti:8000 -sTCP:LISTEN        # shows the PID holding it
+  kill -9 $(lsof -ti:8000 -sTCP:LISTEN)
+  ```
+  This came up repeatedly when both a human and an AI assistant were each
+  independently starting/stopping the app in the same session — worth a
+  quick "is anything already running?" check before every start if that's
+  your workflow too.
+
 **Restart / shutdown problems**
 - As of 2026-09-12, `kill <pid>` (SIGTERM) or Ctrl+C should exit cleanly
   within ~5-6 seconds, camera threads stopped, session `ended_at` written.
@@ -520,7 +582,7 @@ Steps, based on what worked on this MacBook:
 |---|---|---|
 | 1 | SIGTERM used to hang forever, needed SIGKILL, session never closed | **FIXED** 2026-09-12 (`cc2bf39`) — root cause: an open MJPEG stream kept its connection alive forever, so uvicorn's graceful shutdown (which waits for in-flight requests before calling the app's shutdown hook) never completed. Fixed with client-disconnect detection + a 5s bounded timeout. |
 | 2 | RTSP frames could be up to 7s stale, missing fast-moving people | **FIXED** 2026-09-12 (`8d902cd`) — root cause: OpenCV's internal RTSP buffer grows when the pipeline reads slower than frames arrive. Fixed with `LatestFrameReader`, a background thread that always keeps only the freshest frame. Reduced to ~2s (flat, not growing) on the real test camera. |
-| 3 | Occupancy not persisted/replayed across a restart | **OPEN** — design decision never made (`DECISIONS.md` D11) |
+| 3 | Occupancy not persisted/replayed across a restart | **FIXED** 2026-09-12 (`d464df2`, broadened in `f4f2352`) — now resumes on every restart, resets only via Reset counts / Start new session. See §7 and `DECISIONS.md` D11. |
 | 4 | RTSP URL (incl. password) logged in plain text | **OPEN** — not yet masked, low urgency since `logs/` is gitignored |
 | 5 | No dedicated `/health` endpoint | **OPEN** — `/api/status` works as a substitute |
 | 6 | No automatic startup / crash supervisor | **OPEN** — not built |
@@ -578,3 +640,14 @@ than prose summaries tend to be kept in sync.
   privacy guarantee enforced by an automated test — don't add a name,
   face-embedding, or other identity column without a very deliberate,
   separate discussion.
+- **`begin_fresh_session()` must be the only path that resets counts.**
+  If you add another way to zero a counter, route it through this
+  function (or replicate closing-old/opening-new session exactly) — a
+  reset that doesn't close the DB session will be silently undone by the
+  next restart's resume logic (see §7). This is non-obvious and easy to
+  get wrong.
+- **`.tab-panel[hidden] { display: none; }` in `style.css`.** Don't
+  remove it, and if you add a new rule that sets `display` on
+  `.tab-panel` (or any other `[hidden]` element), give it the same
+  `[hidden]` override — otherwise a "hidden" panel silently stays
+  visible, stacked under the active one (see §10 for the full story).
