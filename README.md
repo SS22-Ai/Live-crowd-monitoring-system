@@ -5,7 +5,31 @@ entrance): YOLO person detection + ByteTrack multi-person tracking +
 directional line-crossing counting + a live local dashboard. Runs
 entirely on-device — no cloud, no face recognition, no biometric storage.
 
-## ⚠️ Read this first: how this was built and what's been verified
+## 📌 Current status (2026-09-12) — read this, not just the section below
+
+The section right after this one ("how this was built") is a **frozen
+snapshot from 2026-09-02**, the day this project first ran on real
+hardware. A lot has happened since — real RTSP/CCTV tested successfully,
+two real bugs found and fixed on real hardware, Camera 2 turned on by
+default, 74 automated tests (up from 50). **For the current, accurate
+picture of what's working, what's verified, and what's still open, read
+[`HANDOVER.md`](HANDOVER.md) and [`DEPLOYMENT_STATUS.md`](DEPLOYMENT_STATUS.md)
+instead of trusting dates below.** This README is kept for setup
+instructions (still accurate) and build history (now historical).
+
+Headline corrections to the section below:
+- **RTSP is no longer untested** — connected live to a real CP Plus DVR
+  over RTSP on 2026-09-12 (see §8, rewritten).
+- **Camera 2 (`dining_entrance`) is enabled by default now**, not
+  disabled (see §7, rewritten).
+- **Two real bugs were found on real hardware and fixed**: SIGTERM used
+  to hang forever needing a force-kill (fixed), and RTSP frames could be
+  up to 7 seconds stale, enough to miss a fast-moving person (fixed,
+  reduced to ~2s). Both are in `DECISIONS.md` (D12) and `HANDOVER.md`.
+- **50 tests → 74 tests.** `python3 -m unittest discover -s tests` still
+  works exactly the same way.
+
+## ⚠️ Historical: how this was built and what's been verified (as of 2026-09-02)
 
 This project was built and code-tested inside a **sandboxed Linux
 container with no camera, no macOS, no Apple Silicon, and no network
@@ -56,6 +80,11 @@ was built. Section "First run on your Mac" below is where that happens.
 
 ## 1. Project structure
 
+> **New to this project? Read [`HANDOVER.md`](HANDOVER.md) first** — it's
+> the comprehensive, up-to-date architecture + troubleshooting +
+> deployment guide. This README is the original quick-start doc; some of
+> its historical sections (marked above) are frozen in time.
+
 ```
 event_crowd_monitor/
 ├── app/
@@ -63,7 +92,8 @@ event_crowd_monitor/
 │   ├── config.py               # config.yaml loader
 │   ├── camera/
 │   │   ├── stream.py            # single camera: open/read/reconnect
-│   │   └── manager.py           # per-camera pipeline orchestration
+│   │   ├── manager.py           # per-camera pipeline orchestration
+│   │   └── frame_reader.py      # RTSP freshness fix (LatestFrameReader)
 │   ├── vision/
 │   │   ├── detector.py          # YOLO + ByteTrack wrapper
 │   │   ├── line_counter.py      # directional crossing engine
@@ -94,7 +124,7 @@ event_crowd_monitor/
 ```bash
 cd event_crowd_monitor
 
-python3 --version          # confirm Python 3.10+ (Apple Silicon build)
+python3 --version          # 3.9+ is fine — this project runs on 3.9.6 in practice
 
 python3 -m venv .venv
 source .venv/bin/activate
@@ -195,9 +225,11 @@ Then open: **http://localhost:8000**
 
 You should see the dashboard with an "Event Entrance" panel showing
 your live webcam feed with the counting line, bounding boxes, and
-tracking IDs drawn on it, plus a "Dining Entrance" panel showing
-"Camera offline" (it's disabled in `config.yaml` until you have a
-second camera — see section 7).
+tracking IDs drawn on it. **Both cameras are enabled by default** now
+(`config.yaml`) — if you only have one webcam, "Dining Entrance" will
+show "Camera offline" simply because `source: 1` doesn't exist on your
+machine, not because it's turned off. See §7 to point it at a real
+second camera or RTSP stream.
 
 **MANUAL TEST REQUIRED** — please run this and confirm the dashboard
 loads and the video feed appears. Send me the terminal output (or a
@@ -226,40 +258,74 @@ of a real webcam, which I cannot do. Please run them and report what
 you saw (including anything that looked wrong, like a double-count or
 a missed crossing) and I'll debug from there.
 
-## 7. Enabling Camera 2 (dining entrance)
+## 7. Camera 2 (dining entrance) — already enabled by default
 
-Edit `config.yaml`:
+`config.yaml` ships with **both** cameras `enabled: true`. If you only
+have one physical webcam, `dining_entrance` (`source: 1`) will just show
+"Camera offline" — that's expected, not a bug. To point it at a real
+second camera:
 
 ```yaml
   - id: dining_entrance
     name: Dining Entrance
-    source: 1              # another webcam index, or an RTSP URL
-    enabled: true           # flip this
+    source: 1              # another webcam index, or an RTSP URL (see §8)
+    enabled: true
     line_position: 0.50
     line_buffer: 20
     entry_direction: left_to_right
     initial_occupancy: 0
 ```
 
-No code changes needed — restart the app and it picks it up.
+No code changes needed — restart the app and it picks it up. Confirmed
+working with two cameras running simultaneously with independent counts
+(2026-09-11, real hardware).
 
-## 8. RTSP (Phase 3 — real CCTV)
+## 8. RTSP / real CCTV — tested and working (2026-09-12)
+
+**This has been proven against a real RTSP camera** (a CP Plus DVR),
+not just implemented. Both channels connected, real YOLO detection ran
+on the live feed, and counting worked end-to-end.
 
 ```yaml
   - id: dining_entrance
     name: Dining Entrance
-    source: rtsp://username:password@192.168.1.50:554/stream1
+    source: rtsp://admin:admin%40123@192.168.1.200:554/cam/realmonitor?channel=1&subtype=0
     enabled: true
     ...
 ```
 
-The camera abstraction (`app/camera/stream.py`) treats any string
-source as an RTSP/URL source and passes it straight to
-`cv2.VideoCapture`; the same reconnect logic applies. This hasn't been
-tested against a real RTSP stream (none was available during the
-build) — when you have one, point `source` at it and watch
-`logs/app.log` for `Camera dining_entrance connected` / reconnect
-messages.
+The camera abstraction (`app/camera/stream.py`) treats any non-numeric
+string `source` as an RTSP/URL source and passes it straight to
+`cv2.VideoCapture`; the same reconnect logic applies.
+
+**Three things to know that aren't obvious:**
+
+1. **URL-encode special characters in the password.** An `@` in your
+   password (e.g. `admin@123`) must become `%40` in the URL
+   (`admin%40123`) — an RTSP URL uses `@` as its own separator, so a raw
+   `@` in the password breaks parsing. In Python: `urllib.parse.quote(password, safe="")`.
+2. **Never put real camera credentials in `config.yaml`** — it's tracked
+   in git. Instead, create a `config.local.yaml` (already gitignored)
+   with the real RTSP URL, and run with:
+   ```bash
+   CROWD_MONITOR_CONFIG=config.local.yaml python run.py
+   ```
+   `app/config.py` reads this env var to pick the config file.
+3. **RTSP URL paths are brand-specific.** The format above
+   (`/cam/realmonitor?channel=N&subtype=0`) is the common Dahua-style
+   path used by CP Plus and many other Indian-market DVR/NVR brands.
+   Others (Hikvision-style: `/Streaming/Channels/101`; ONVIF-generic
+   brands like Sparsh) use different paths — if the connection fails,
+   check the network is reachable first (`ping`/`arp`/a port check on
+   554), then try alternate URL formats before assuming it's broken.
+
+**Known real-hardware issue, already fixed:** `cv2.VideoCapture` buffers
+RTSP frames internally, and if the pipeline reads slower than frames
+arrive, `.read()` returns increasingly stale frames — measured up to
+**7 seconds** of lag on a real stream, enough to miss a fast-moving
+person entirely. Fixed in `app/camera/frame_reader.py`
+(`LatestFrameReader`) — see `DECISIONS.md`. Reduced to ~2s (normal
+network/decode latency, not a growing backlog) after the fix.
 
 ## 9. API reference
 
@@ -283,6 +349,12 @@ Status key: **PASS (real hw)** = actually executed on a MacBook Air M2 on
 2026-09-02. **MANUAL** = still needs you + a real webcam (camera access
 was not grantable in the automated environment).
 
+> This table is a historical snapshot from 2026-09-02 (50 tests). The
+> suite has since grown to **74 tests** (`python3 -m unittest discover -s tests`),
+> and real webcam + real RTSP + two P0 hardware bugs have since been
+> tested/fixed on real hardware. For the current, dated status of every
+> item below, see `DEPLOYMENT_STATUS.md` and `HANDOVER.md` instead.
+
 | # | Test | Status |
 |---|---|---|
 | 1 | Application starts | **PASS (real hw)** — boots with all expected log lines, uvicorn serves on :8000 |
@@ -301,16 +373,26 @@ was not grantable in the automated environment).
 | 14 | SQLite records events | **Automated PASS** + **PASS (real hw)** — walk-through sim wrote ENTRY/EXIT rows to a real DB file |
 | 15 | Dashboard updates live | **PASS (real hw)** — panels injected from polling, status pill + stats update every 1s, no JS console errors; **MANUAL** to see live counts tick from a real crossing |
 
-## 11. Known limitations (V1)
+## 11. Known limitations (updated 2026-09-12 — see `HANDOVER.md` for the full list)
 
-- Dining entrance (Camera 2) is untested with real hardware — only one
-  physical webcam was available during this build, exactly as scoped.
-- RTSP support is implemented but untested against a real stream.
-- Live updates use polling, not WebSockets (see section 9).
-- No auth on the dashboard/API — fine for local-network V1, not for
+- Live updates use polling, not WebSockets (see section 9) — a
+  deliberate V1 simplicity tradeoff.
+- No auth on the dashboard/API — fine for local-network use, not for
   exposing beyond your LAN as-is.
-- YOLO/ByteTrack inference itself has not been run in this build
-  environment — it needs verification on your actual Mac.
+- Occupancy is derived live from events, not persisted — a restart
+  starts a fresh count rather than replaying history (open decision,
+  see `DECISIONS.md` D11).
+- The RTSP URL (including the camera password) is currently written to
+  `logs/app.log` in plain text when a camera connects — don't share
+  that log file. Not yet masked.
+- No automatic startup on boot and no crash-supervisor — the app must
+  be started manually and isn't auto-restarted if it crashes.
+- Multi-person tracking is proven on a still image (automated test) but
+  has not yet been observed with 2+ real people crossing together live.
+- No run has exceeded roughly tens of minutes continuously — multi-hour
+  stability is unverified.
+- Only ever run on a MacBook Air M2 — untested on other hardware
+  (e.g. a Mac mini) if that's the real deployment target.
 
 ## 12. Security / privacy (spec section 29)
 
