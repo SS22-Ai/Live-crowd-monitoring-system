@@ -213,6 +213,7 @@ class CameraManager:
         inference_width: int,
         inference_height: int,
         frame_skip: int = 0,
+        resume_session_id: Optional[int] = None,
     ):
         """
         `detector_factory` is a zero-arg callable that returns a NEW
@@ -222,6 +223,12 @@ class CameraManager:
         tracker state inside the model object itself. Two threads
         feeding two unrelated video streams into the same tracker would
         cross-contaminate track IDs between cameras.
+
+        `resume_session_id`: if given (the app crashed last time instead
+        of shutting down cleanly — see app/main.py's resolve_startup_session),
+        each camera's entries/exits are seeded from that session's already-
+        recorded events instead of starting at 0, so live occupancy picks
+        up where it left off rather than silently resetting to zero.
         """
         self.pipelines: Dict[str, CameraPipeline] = {}
         for cfg in camera_configs:
@@ -237,6 +244,20 @@ class CameraManager:
             self.pipelines[cfg.id] = CameraPipeline(
                 cfg, detector, db, session_id_getter, inference_width, inference_height, frame_skip
             )
+
+        if resume_session_id is not None:
+            for cfg in camera_configs:
+                pipeline = self.pipelines[cfg.id]
+                entries = db.count_events(resume_session_id, cfg.id, "ENTRY")
+                exits = db.count_events(resume_session_id, cfg.id, "EXIT")
+                pipeline.line_counter.entries = entries
+                pipeline.line_counter.exits = exits
+                pipeline.occupancy.entries = entries
+                pipeline.occupancy.exits = exits
+                logger.info(
+                    "Camera %s: resumed session %s with entries=%d exits=%d (live_occupancy=%d)",
+                    cfg.id, resume_session_id, entries, exits, pipeline.occupancy.live_occupancy,
+                )
 
     def start_all(self):
         for pipeline in self.pipelines.values():

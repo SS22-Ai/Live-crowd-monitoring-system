@@ -34,6 +34,26 @@ def is_uncached_frontend_path(path: str) -> bool:
     return path == "/" or path.startswith("/static/")
 
 
+def resolve_startup_session(db) -> tuple[int, bool]:
+    """Decide whether to resume the previous session or start a fresh one.
+
+    On a clean shutdown, on_shutdown() (below) always calls db.end_session(),
+    setting ended_at. If the most recent session still has ended_at=None,
+    the app never got there last time -- it crashed (or was force-killed).
+    In that case we reuse the SAME session id (instead of starting a new
+    one) so CameraManager can replay its already-recorded events and
+    resume live occupancy where it left off, rather than silently
+    resetting to zero. A clean previous stop, or the very first run,
+    starts a new session as before.
+
+    Returns (session_id, resumed).
+    """
+    latest = db.latest_session()
+    if latest is not None and latest.ended_at is None:
+        return latest.id, True
+    return db.start_session(), False
+
+
 def setup_logging(log_path: str):
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
     logging.basicConfig(
@@ -106,8 +126,16 @@ def create_app() -> FastAPI:
     db = Database(cfg.db_path)
     logger.info("Database ready at %s", cfg.db_path)
 
-    session_state = {"session_id": db.start_session()}
-    logger.info("Session started: id=%s", session_state["session_id"])
+    session_id, resumed = resolve_startup_session(db)
+    session_state = {"session_id": session_id}
+    if resumed:
+        logger.warning(
+            "Found an unclosed session id=%s (app likely crashed last time) — "
+            "resuming it; camera counts will be replayed from its recorded events",
+            session_id,
+        )
+    else:
+        logger.info("Session started: id=%s", session_state["session_id"])
 
     if not os.path.exists(cfg.model_path):
         logger.warning(
@@ -140,6 +168,7 @@ def create_app() -> FastAPI:
         inference_width=cfg.inference_width,
         inference_height=cfg.inference_height,
         frame_skip=cfg.frame_skip,
+        resume_session_id=session_id if resumed else None,
     )
     manager.start_all()
     logger.info("Camera pipelines started")
