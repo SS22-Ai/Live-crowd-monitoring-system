@@ -92,11 +92,32 @@ async function pollStatus() {
       ensureCameraPanel(cam);
       updateCameraPanel(cam);
     }
+    updateSummary(data.cameras);
   } catch (err) {
     console.error("status poll failed:", err);
   } finally {
     setTimeout(pollStatus, STATUS_POLL_MS);
   }
+}
+
+// "Total crowd inside event area" = event_entrance's live occupancy minus
+// however many of those people have since walked into dining_entrance
+// (each dining ENTRY means one fewer person in the main event area).
+// "Total crowd entered in dining" = dining_entrance's cumulative entries.
+// Both derived client-side from /api/status — no new endpoint needed, and
+// this degrades gracefully (dining count = 0) if dining_entrance is
+// disabled or absent from the response.
+function updateSummary(cameras) {
+  const eventCam = cameras.find((c) => c.camera_id === "event_entrance");
+  const diningCam = cameras.find((c) => c.camera_id === "dining_entrance");
+  const eventLive = eventCam ? eventCam.live_occupancy : 0;
+  const diningEntries = diningCam ? diningCam.entries : 0;
+  const totalInEventArea = Math.max(0, eventLive - diningEntries);
+
+  const eventEl = document.getElementById("summary-event-total");
+  const diningEl = document.getElementById("summary-dining-total");
+  if (eventEl) eventEl.textContent = totalInEventArea;
+  if (diningEl) diningEl.textContent = diningEntries;
 }
 
 function formatTime(unixSeconds) {

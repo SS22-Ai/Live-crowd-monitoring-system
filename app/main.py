@@ -26,6 +26,14 @@ from app.vision.detector import PersonDetector  # noqa: E402
 FRONTEND_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend")
 
 
+def is_uncached_frontend_path(path: str) -> bool:
+    """True for the dashboard's own HTML/JS/CSS ("/" and "/static/*"), which
+    should never be browser-cached since they're edited in place with no
+    build step. False for everything else (in particular /api/* and
+    /video/*, which must not get a blanket no-store)."""
+    return path == "/" or path.startswith("/static/")
+
+
 def setup_logging(log_path: str):
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
     logging.basicConfig(
@@ -149,6 +157,13 @@ def create_app() -> FastAPI:
         return FileResponse(os.path.join(FRONTEND_DIR, "index.html"))
 
     app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
+
+    @app.middleware("http")
+    async def no_cache_frontend(request, call_next):
+        response = await call_next(request)
+        if is_uncached_frontend_path(request.url.path):
+            response.headers["Cache-Control"] = "no-store"
+        return response
 
     @app.on_event("shutdown")
     def on_shutdown():

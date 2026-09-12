@@ -34,7 +34,7 @@ cameras:
   - id: dining_entrance
     name: Dining Entrance
     source: 1                     # change to a real index or rtsp:// URL
-    enabled: false
+    enabled: true
     line_position: 0.50
     line_buffer: 20
     entry_direction: left_to_right

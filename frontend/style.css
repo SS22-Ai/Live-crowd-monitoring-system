@@ -112,6 +112,35 @@ body {
   margin: 0 auto;
 }
 
+.summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 20px;
+}
+
+.summary__tile {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px 22px;
+}
+
+.summary__label {
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 8px;
+}
+
+.summary__value {
+  font-family: "IBM Plex Mono", monospace;
+  font-weight: 700;
+  font-size: 2.4rem;
+  line-height: 1;
+  color: var(--live);
+}
+
 .camera-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
