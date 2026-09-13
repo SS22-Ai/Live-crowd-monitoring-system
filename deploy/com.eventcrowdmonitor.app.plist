@@ -16,6 +16,14 @@
   which fills in the actual project location, creates logs/data first,
   and (re)installs the agent. This lets the same template work unchanged
   on any machine.
+
+  This runs python directly -- an .app-bundle wrapper was tried
+  2026-09-13 to get macOS Camera permission (TCC) working for local USB
+  webcams under launchd, and concretely failed (ad-hoc signing never
+  produced a Camera entry in System Settings even after the bundle showed
+  up as a recognized background item) -- see DEPLOYMENT.md and
+  HANDOVER.md §14 before re-attempting this. Doesn't matter at all for
+  RTSP cameras, which never need Camera permission in the first place.
 -->
 <plist version="1.0">
 <dict>

@@ -37,9 +37,9 @@ dashboard. No cloud, no face recognition, no biometric storage.
 | File | Responsibility | Key symbols |
 |---|---|---|
 | `app/config.py` | Load `config.yaml` → typed objects; normalize `source`, validate direction & line position | `CameraConfig`, `AppConfig`, `load_config()` |
-| `app/main.py` | Wire everything; FastAPI app factory; **main-thread camera permission prime**; shutdown hook | `create_app()`, `prime_camera_permissions()`, `setup_logging()` |
+| `app/main.py` | Wire everything; FastAPI app factory; **main-thread camera permission prime**; shutdown hook; stuck-camera watchdog thread (D13) | `create_app()`, `prime_camera_permissions()`, `setup_logging()`, `stuck_camera_watchdog()` |
 | `app/camera/stream.py` | One capture device (webcam index or RTSP URL); ONLINE/OFFLINE/RECONNECTING FSM; never raises to caller; ONLINE only after a real frame read | `CameraStream`, `CameraStatus` |
-| `app/camera/manager.py` | One pipeline thread per camera; per-camera detector instance; FPS calc; latest-JPEG buffer; stats | `CameraManager`, `CameraPipeline`, `CameraRuntimeStats` |
+| `app/camera/manager.py` | One pipeline thread per camera; per-camera detector instance; FPS calc; latest-JPEG buffer; stats; tracks how long a previously-ONLINE camera has been stuck offline (D13) | `CameraManager`, `CameraPipeline`, `CameraRuntimeStats`, `seconds_stuck_offline()` |
 | `app/vision/detector.py` | YOLO load + `.track(persist=True, classes=[0], tracker='bytetrack.yaml')`; parse boxes→`Detection`; device select | `PersonDetector`, `Detection`, `select_device()`, `PERSON_CLASS_ID=0` |
 | `app/vision/line_counter.py` | Bucket each track LEFT/BUFFER/RIGHT by bbox bottom-center; fire ENTRY/EXIT only on confirmed side flip; expire stale tracks | `LineCounter`, `Zone`, `EventType`, `TrackState`, `CrossingEvent` |
 | `app/occupancy/manager.py` | `live = max(0, initial + entries − exits)` | `OccupancyManager`, `OccupancySnapshot` |

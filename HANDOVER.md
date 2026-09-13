@@ -1,12 +1,15 @@
 # Event Crowd Monitor — Developer Handover
 
-_Last updated: 2026-09-13 (added the launchd auto-restart supervisor and
-`DEPLOYMENT.md` runbook — see §13 and §14 item 6). Previous update
-2026-09-12 (end of day — session persistence model, dashboard redesign, and
-CSV reports were all added in the final hour; read §7, §9, §10 and §14 even
-if you've seen this file before). If you're picking this project up cold,
-read this whole file before touching code — it will save you from
-re-discovering things the hard way._
+_Last updated: 2026-09-13, second pass (added a stuck-camera watchdog for
+USB hot-unplug recovery, and found/documented a Camera-TCC-under-launchd
+dead end — see §12 items 12-13 and `DECISIONS.md` D13). Earlier the same
+day: added the launchd auto-restart supervisor and `DEPLOYMENT.md` runbook
+— see §13 and §14 item 6. Previous update 2026-09-12 (end of day — session
+persistence model, dashboard redesign, and CSV reports were all added in
+the final hour; read §7, §9, §10 and §14 even if you've seen this file
+before). If you're picking this project up cold, read this whole file
+before touching code — it will save you from re-discovering things the
+hard way._
 
 ---
 
@@ -430,7 +433,7 @@ always shows up on a normal refresh, no more stale-cache confusion.
 ## 11. Testing
 
 ```bash
-# the whole suite — 91 tests, fast, no camera/model needed for 87 of them
+# the whole suite — 98 tests, fast, no camera/model needed for 94 of them
 .venv/bin/python -m unittest discover -s tests -v
 
 # a single file
@@ -452,6 +455,7 @@ always shows up on a normal refresh, no more stale-cache confusion.
 | `test_frame_reader.py` | 5 | RTSP staleness fix (`LatestFrameReader`) | No |
 | `test_session_resume.py` | 9 | Resume-on-restart + `begin_fresh_session` reset durability (§7) | No |
 | `test_interval_report.py` | 8 | 30-min bucketing math for `/api/reports/interval` | No |
+| `test_stuck_camera_watchdog.py` | 7 | Stuck-offline tracking math for the process-restart watchdog (D13) | No |
 
 **What automated tests do NOT cover (manual testing required):**
 - Anything needing a real physical person: a deliberate walk-through
@@ -486,6 +490,52 @@ for the honest distinction on every feature.
 - Check `logs/app.log` for `Camera <id> failed to open` messages.
 - For a webcam: run `test_camera.py` to see which indexes are AVAILABLE.
 - For RTSP: see the next item.
+
+**A USB webcam was unplugged and replugged and never comes back on its
+own (confirmed live 2026-09-13)**
+- This is a real macOS/OpenCV (AVFoundation) limitation, not a bug in the
+  reconnect loop: the already-running process can permanently lose the
+  ability to reopen that camera index in-process, even though a brand-new
+  process opens the same index instantly. Confirmed by running
+  `test_camera.py` fresh while the main app kept failing on the same
+  index.
+- **Fix that's actually reliable: restart the whole process.** If running
+  manually, `Ctrl+C` and rerun. If running under the launchd supervisor
+  (`deploy/`), this is now automatic — a camera that was previously
+  ONLINE and has been stuck for `stuck_camera_restart_seconds` (config,
+  default 60s) triggers a full process restart on its own (see
+  `DECISIONS.md` D13 and `app/main.py`'s `stuck_camera_watchdog`). A
+  camera that has never connected at all does NOT trigger this
+  deliberately — see D13 for why auto-hopping to a different index was
+  rejected instead.
+- **This watchdog only helps under the supervisor.** See the next item —
+  local USB webcams currently can't get Camera permission under the
+  supervisor at all, so today this mostly matters for RTSP cameras (which
+  don't have this failure mode in the first place, but the watchdog is a
+  reasonable general safety net for them too).
+
+**Local USB webcam (built-in or external) never gets Camera permission
+under the launchd supervisor, no matter what (confirmed live 2026-09-13)**
+- Symptom: `logs/app.log` repeats "Main-thread camera prime for source N
+  could not read a frame" forever, and no entry for this app EVER appears
+  in System Settings > Privacy & Security > Camera, no matter how many
+  times it's restarted.
+- **Root cause:** launchd spawning python directly isn't attributed to
+  any app TCC recognizes — a raw CLI binary gets silently, permanently
+  denied Camera access, with no prompt and no way to grant it manually
+  (there's nothing to toggle if it's not listed).
+- **A fix was attempted and failed** (`DECISIONS.md` D13): wrapping the
+  launch in an ad-hoc-codesigned `.app` bundle so TCC would have a real
+  app to attribute access to. The bundle registered as a recognized
+  background item but never produced a Camera entry — modern macOS
+  appears to require a real (paid) Apple Developer ID signature +
+  notarization for this, not just ad-hoc signing. **Do not re-attempt
+  without one.**
+- **Workaround: run manually instead of under the supervisor** for local
+  webcam testing — `CROWD_MONITOR_CONFIG=config.local.yaml .venv/bin/python
+  run.py` from a real Terminal, where the existing Terminal Camera grant
+  already covers it. This doesn't matter at all for your real event
+  cameras if they're RTSP (network cameras never need Camera permission).
 
 **RTSP failure**
 1. Check basic network reachability first, *before* suspecting the URL:
@@ -604,6 +654,8 @@ Steps, based on what worked on this MacBook:
 | 9 | Sparsh camera (client's actual hardware) currently unreachable | **UNRESOLVED** as of 2026-09-12 — network-level failure (ARP incomplete), cause not yet diagnosed |
 | 10 | No multi-hour continuous run has ever happened | **UNTESTED** |
 | 11 | Never run on anything but this one MacBook Air M2 | **UNTESTED** on other hardware |
+| 12 | A USB webcam unplugged/replugged never reconnects on its own in-process | **MITIGATED** 2026-09-13 — stuck-camera watchdog restarts the whole process under the supervisor after `stuck_camera_restart_seconds` (default 60s); real macOS/OpenCV limitation, not fixable in-process. See `DECISIONS.md` D13. Detection math + signal mechanism verified live separately; not yet chained end-to-end against a real camera. |
+| 13 | Local USB webcams can't get Camera permission under the launchd supervisor at all | **OPEN, dead end found** 2026-09-13 — an ad-hoc-codesigned `.app` wrapper was tried and failed to get TCC to list it; likely needs a paid Apple Developer ID. Workaround: run manually from Terminal for local webcam testing. Does not affect RTSP cameras. See `DECISIONS.md` D13. |
 
 ---
 

@@ -59,6 +59,12 @@ class AppConfig:
     log_path: str = "logs/app.log"
     host: str = "0.0.0.0"
     port: int = 8000
+    # A camera that was previously ONLINE and has been stuck OFFLINE/
+    # RECONNECTING for this many seconds triggers a full process restart
+    # (see app/main.py's watchdog and CameraPipeline.seconds_stuck_offline)
+    # -- works around a real macOS/OpenCV limitation where a USB camera
+    # lost mid-session can't be reopened in-process. 0 disables it.
+    stuck_camera_restart_seconds: int = 60
 
     def camera_by_id(self, camera_id: str) -> CameraConfig:
         for cam in self.cameras:
@@ -90,4 +96,5 @@ def load_config(path: str = CONFIG_PATH) -> AppConfig:
         log_path=app_section.get("log_path", "logs/app.log"),
         host=app_section.get("host", "0.0.0.0"),
         port=app_section.get("port", 8000),
+        stuck_camera_restart_seconds=app_section.get("stuck_camera_restart_seconds", 60),
     )

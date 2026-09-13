@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import logging
 import os
+import signal
 import sys
+import threading
+import time
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
@@ -117,6 +120,44 @@ def prime_camera_permissions(camera_configs, logger):
             logger.warning("Main-thread camera prime for source %s errored: %s", cfg.source, exc)
 
 
+def stuck_camera_watchdog(manager, threshold_seconds, logger, poll_interval_seconds=5.0):
+    """Safety net for a real macOS/OpenCV limitation, not a design choice:
+    a USB camera lost mid-session (physically unplugged/replugged) can
+    leave CameraStream permanently unable to reopen the same index
+    in-process, even though a brand-new process opens it fine immediately
+    (confirmed live 2026-09-13 -- dozens of in-process reopen attempts
+    all failed while a fresh `python test_camera.py` process worked).
+
+    A full process restart reliably fixes it, so once a camera that WAS
+    online has been stuck for `threshold_seconds` (see
+    CameraPipeline.seconds_stuck_offline -- a camera that's never
+    connected at all does NOT count, or a permanently-unreachable camera
+    would restart the whole process forever), send this process SIGTERM
+    -- the exact same graceful-shutdown path a normal clean stop uses
+    (session ended_at written, cameras released, 5s bounded timeout) --
+    and let the launchd supervisor (deploy/) bring it back with a fresh
+    camera session, typically within ~10 seconds and with no one
+    touching the keyboard.
+
+    Runs as a daemon thread; exits after firing once so it doesn't keep
+    signalling while shutdown is already in progress.
+    """
+    if threshold_seconds <= 0:
+        return
+    while True:
+        time.sleep(poll_interval_seconds)
+        stuck_seconds = manager.max_seconds_stuck_offline()
+        if stuck_seconds >= threshold_seconds:
+            logger.critical(
+                "A camera has been stuck offline for %.0fs after previously being "
+                "online (threshold %ds) -- restarting the whole process so the "
+                "supervisor can bring it back with a fresh camera session.",
+                stuck_seconds, threshold_seconds,
+            )
+            os.kill(os.getpid(), signal.SIGTERM)
+            return
+
+
 def create_app() -> FastAPI:
     cfg = load_config()
     setup_logging(cfg.log_path)
@@ -174,6 +215,18 @@ def create_app() -> FastAPI:
     )
     manager.start_all()
     logger.info("Camera pipelines started")
+
+    if cfg.stuck_camera_restart_seconds > 0:
+        threading.Thread(
+            target=stuck_camera_watchdog,
+            args=(manager, cfg.stuck_camera_restart_seconds, logger),
+            daemon=True,
+            name="stuck-camera-watchdog",
+        ).start()
+        logger.info(
+            "Stuck-camera watchdog active (restart after %ds continuously offline)",
+            cfg.stuck_camera_restart_seconds,
+        )
 
     app = FastAPI(title="Event Crowd Monitor")
     app.state.config = cfg

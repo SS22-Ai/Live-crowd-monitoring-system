@@ -5,9 +5,11 @@ Phase numbers refer to DEPLOYMENT_STATUS.md.
 
 Legend: `[ ]` NOT STARTED · `[~]` IN PROGRESS · `[!]` BLOCKED · `[M]` MANUAL (needs you)
 
-_Last updated: 2026-09-13 (launchd supervisor + DEPLOYMENT.md items only —
-the rest of this file has not been re-audited against current code, see
-CLAUDE.md's warning not to trust it blindly)_
+_Last updated: 2026-09-13, second pass (stuck-camera watchdog + Camera-TCC-
+under-launchd dead end, see D13 — plus the launchd supervisor +
+DEPLOYMENT.md items from earlier the same day). The rest of this file has
+not been re-audited against current code, see CLAUDE.md's warning not to
+trust it blindly._
 
 ---
 
@@ -23,7 +25,13 @@ CLAUDE.md's warning not to trust it blindly)_
 - [M] Walk-through §6.1–6.4: L→R entry, R→L exit, hover = no count, two people independent.  *(Phase 4/12)*
 - [M] Watch dashboard entry/exit/occupancy + activity feed update from real crossings.  *(Phase 8)*
 - [M] Real live-video tracking stability (moving person, brief occlusion).  *(Phase 3)*
-- [M] Unplug/replug the webcam mid-run → expect RECONNECTING → ONLINE, no crash.  *(Phase 2)*
+- [x] Unplug/replug a USB webcam mid-run — done live 2026-09-13, and it did
+      NOT go RECONNECTING → ONLINE on its own (a real macOS/OpenCV
+      limitation, confirmed — see `DECISIONS.md` D13). A full process
+      restart is what actually fixes it; under the launchd supervisor
+      that's now automatic via the stuck-camera watchdog. RTSP
+      disconnect/reconnect (a genuinely different code path) is still
+      unverified against a real physical unplug/replug.  *(Phase 2)*
 - [M] 4+ hour continuous run — watch for leaks / fps drift / crashes.  *(Phase 11/12)*
 
 ## CODE — decisions to make (see DECISIONS D11/D12)
@@ -60,6 +68,19 @@ CLAUDE.md's warning not to trust it blindly)_
       (the kill -9 crash-restart path is now verified, see above — this is
       only the power-cut/reboot path, still untested).  *(Phase 11)*
 - [ ] Verify on the actual deployment box (Mac mini Apple Silicon), headless.  *(Phase 11)*
+- [x] Stuck-camera watchdog (`app/main.py`, `app/camera/manager.py`) — a
+      camera that was previously ONLINE and stays stuck OFFLINE/
+      RECONNECTING for `stuck_camera_restart_seconds` (config, default
+      60s) now triggers a full process restart under the supervisor.
+      Added + tested 2026-09-13, see `DECISIONS.md` D13. Tracking math and
+      the SIGTERM mechanism are each verified separately; not yet chained
+      end-to-end against a real camera going online-then-stuck.  *(Phase 2/11)*
+- [ ] Camera-permission (TCC) under the launchd supervisor for LOCAL USB
+      webcams — tried an ad-hoc-codesigned `.app` wrapper 2026-09-13, it
+      failed to get a Camera entry at all (see `DECISIONS.md` D13). Would
+      need a paid Apple Developer ID to pursue further; not worth it
+      unless local webcams become part of the actual event setup (real
+      cameras are RTSP, which doesn't hit this at all). Not blocking.  *(Phase 2)*
 
 ## CLEANUP / NICE-TO-HAVE
 

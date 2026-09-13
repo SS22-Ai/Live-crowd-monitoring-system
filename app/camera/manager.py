@@ -92,6 +92,13 @@ class CameraPipeline:
         self._thread: Optional[threading.Thread] = None
         self._fps = 0.0
 
+        # Stuck-camera tracking (see seconds_stuck_offline docstring) --
+        # deliberately only starts counting once this camera has proven it
+        # can connect at all, so a camera that's simply never reachable
+        # (wrong config, dead network) never triggers a process restart.
+        self._ever_online = False
+        self._offline_since: Optional[float] = None
+
     def start(self):
         if not self.cfg.enabled:
             logger.info("Camera %s is disabled in config; not starting", self.cfg.id)
@@ -115,6 +122,7 @@ class CameraPipeline:
         while not self._stop_event.is_set():
             try:
                 ok, frame = self.stream.read()
+                self._track_stuck_state()
                 if not ok or frame is None:
                     time.sleep(0.2)
                     self._publish_status_only_frame()
@@ -171,6 +179,38 @@ class CameraPipeline:
             except Exception as exc:  # noqa: BLE001 - never let one camera crash the app
                 logger.error("Camera %s pipeline error (continuing): %s", self.cfg.id, exc)
                 time.sleep(0.5)
+
+    def _track_stuck_state(self):
+        if self.stream.status == CameraStatus.ONLINE:
+            self._ever_online = True
+            self._offline_since = None
+        elif self._ever_online and self._offline_since is None:
+            self._offline_since = time.time()
+
+    def seconds_stuck_offline(self) -> float:
+        """0.0 unless this camera was previously ONLINE and has been
+        continuously non-ONLINE (OFFLINE or RECONNECTING) since. Used by
+        the stuck-camera watchdog (app/main.py) to decide whether to
+        force a full process restart.
+
+        Real-world motivation (2026-09-13): unplugging/replugging a local
+        USB webcam can leave this camera's CameraStream permanently
+        unable to reopen the same index in-process, even though a
+        brand-new process opens it fine immediately -- a known macOS/
+        OpenCV AVFoundation limitation, not a bug in the reconnect loop
+        (confirmed live: dozens of in-process reopen attempts all failed
+        while a fresh `python test_camera.py` process opened the same
+        index without issue). A full process restart reliably fixes it.
+
+        Deliberately gated on _ever_online: a camera that has NEVER
+        connected (wrong config, genuinely unreachable network camera)
+        must not trigger this -- restarting the whole process would just
+        repeatedly disrupt every OTHER camera's pipeline too, for a
+        camera a restart can't actually help.
+        """
+        if self._offline_since is None:
+            return 0.0
+        return time.time() - self._offline_since
 
     def _publish_frame(self, frame):
         ok, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
@@ -272,6 +312,10 @@ class CameraManager:
 
     def all_stats(self):
         return [p.stats() for p in self.pipelines.values()]
+
+    def max_seconds_stuck_offline(self) -> float:
+        """Worst case across all cameras; see CameraPipeline.seconds_stuck_offline."""
+        return max((p.seconds_stuck_offline() for p in self.pipelines.values()), default=0.0)
 
     def reset_all(self):
         for p in self.pipelines.values():

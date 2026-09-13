@@ -165,3 +165,70 @@ lifespan migration was needed once the actual blocker was fixed.
 **Verified live twice:** with an open `/video/` stream, and without one —
 both exit in ~5-6s on a plain `kill`/Ctrl+C, no `SIGKILL`, `ended_at`
 written. 5 new tests in `tests/test_video_feed_shutdown.py`.
+
+### D13 — Stuck local-USB-camera recovery: process-restart watchdog, NOT auto index-hopping; Camera-TCC-under-launchd abandoned (2026-09-13)
+**Observed live 2026-09-13:** unplugging and replugging the external USB
+webcam left `CameraStream` permanently unable to reopen that camera's
+index in-process — dozens of reconnect attempts over more than a minute
+all failed, while a brand-new `python test_camera.py` process opened the
+same index instantly. Confirmed as a real macOS/OpenCV (AVFoundation)
+limitation, not a bug in the reconnect loop itself: the loop was already
+correctly creating a fresh `cv2.VideoCapture` object on every attempt.
+**Option rejected: auto-hop to a different camera index on repeated
+failure.** Considered and explicitly rejected — camera index assignment
+on macOS can shift on any hot-plug event (not just for the replugged
+device), so silently attaching a *different* physical camera to a zone's
+fixed identity (`event_entrance` vs `dining_entrance`) risks the worst
+failure mode for a counting system: confidently-displayed, silently
+*wrong* counts, attributed to the wrong entrance. Staying visibly
+OFFLINE is safer than guessing.
+**Decision: a stuck-camera watchdog that restarts the whole process.**
+`CameraPipeline.seconds_stuck_offline()` / `CameraManager.max_seconds_
+stuck_offline()` (`app/camera/manager.py`) track how long a camera that
+was PREVIOUSLY online has been continuously non-ONLINE; deliberately
+gated on having been online at least once, so a camera that's simply
+never reachable (bad config, dead network) never triggers this — that
+would restart the whole process forever and repeatedly disrupt every
+OTHER camera's pipeline too, for a camera a restart can't help anyway.
+`app/main.py`'s `stuck_camera_watchdog()` polls this and, past
+`stuck_camera_restart_seconds` (config, default 60s), sends the process
+its own SIGTERM — reusing the exact D12-verified graceful-shutdown path
+(session `ended_at` written, cameras released, 5s bounded timeout) rather
+than a hard `os._exit`. This only self-heals under the launchd supervisor
+(`deploy/`), which brings the process back with a fresh camera session
+within ~10s.
+**Camera permission (TCC) under launchd for local USB webcams: tried and
+abandoned, same day.** launchd spawning python directly gets *no* Camera
+prompt and *no* entry in System Settings, ever (silent, permanent denial
+— same category of issue as the Downloads-folder TCC problem, but with
+no known workaround at this tier). Tried wrapping the launch in a minimal
+ad-hoc-codesigned `.app` bundle (`deploy/CrowdMonitorLauncher.app`) so
+TCC would have a real app to attribute access to, including fixing an
+`exec`-vs-subprocess mistake along the way (an `exec`'d process discards
+the bundle identity TCC needs; kept the wrapper alive as python's direct
+parent instead, forwarding SIGTERM, so "responsible process" resolution
+could reach it). Result: the bundle registered as a recognized background
+item, but **never produced a Camera entry at all** — modern macOS appears
+to require a real Apple Developer ID signature + notarization for this,
+not just ad-hoc signing, which is out of scope. **Abandoned; do not
+re-attempt without a paid Developer ID.** The bundle and codesign step
+were removed; `deploy/com.eventcrowdmonitor.app.plist` launches python
+directly again.
+**Net effect:** the watchdog is real, general infrastructure that works
+today for RTSP cameras under the supervisor (the actual event path — RTSP
+never hits Camera TCC at all). Local USB webcam testing under the
+supervisor specifically remains unsupported; use a manual
+`CROWD_MONITOR_CONFIG=config.local.yaml .venv/bin/python run.py` from a
+real Terminal for that instead (see `HANDOVER.md` §12).
+**Verified live:** the watchdog's pure tracking logic (7 tests,
+`tests/test_stuck_camera_watchdog.py`); separately confirmed
+`stuck_camera_watchdog()` itself really fires `os.kill(self, SIGTERM)`
+and really terminates the process, using a fake always-stuck manager
+(no camera needed) -- exited with code 143 (SIGTERM) as expected. Full
+suite 98/98. **NOT yet observed end-to-end with a real camera** going
+online-then-stuck under the live supervisor (blocked right now by the
+same TCC wall for local USB, and by the demo RTSP camera being
+unreachable) -- the two halves (detection math, and the kill-triggers-
+graceful-shutdown path already proven separately via D12 and this
+session's earlier kill -9 tests) are each verified, just not yet chained
+together against real hardware.
