@@ -1,10 +1,12 @@
 # Event Crowd Monitor — Developer Handover
 
-_Last updated: 2026-09-12 (end of day — session persistence model, dashboard
-redesign, and CSV reports were all added in the final hour; read §7, §9, §10
-and §14 even if you've seen this file before). If you're picking this
-project up cold, read this whole file before touching code — it will save
-you from re-discovering things the hard way._
+_Last updated: 2026-09-13 (added the launchd auto-restart supervisor and
+`DEPLOYMENT.md` runbook — see §13 and §14 item 6). Previous update
+2026-09-12 (end of day — session persistence model, dashboard redesign, and
+CSV reports were all added in the final hour; read §7, §9, §10 and §14 even
+if you've seen this file before). If you're picking this project up cold,
+read this whole file before touching code — it will save you from
+re-discovering things the hard way._
 
 ---
 
@@ -133,6 +135,9 @@ event_crowd_monitor/
 ├── DECISIONS.md                   # chronological log of *why* things were built
 │                                  #   this way, including both P0 bug writeups
 ├── DEPLOYMENT_STATUS.md           # the detailed 12-phase deployment checklist
+├── DEPLOYMENT.md                  # event-day runbook: install/start/stop/troubleshoot
+├── deploy/
+│   └── com.eventcrowdmonitor.app.plist  # launchd LaunchAgent: auto-start + crash restart
 ├── PROGRESS.md / TEST_STATUS.md / TODO.md  # supporting tracking docs
 ```
 
@@ -140,6 +145,7 @@ event_crowd_monitor/
 - Quick setup steps → `README.md`
 - Deep architecture / "why is it built this way" → this file + `DECISIONS.md`
 - "Is X actually verified?" → `DEPLOYMENT_STATUS.md`
+- "How do I actually run this unattended on event day?" → `DEPLOYMENT.md`
 - "What's left to do?" → `TODO.md`
 
 ---
@@ -569,10 +575,14 @@ Steps, based on what worked on this MacBook:
    (never commit it — already gitignored).
 7. Run: `CROWD_MONITOR_CONFIG=config.local.yaml .venv/bin/python run.py`,
    open `http://localhost:8000`.
-8. **Not yet built**: no launchd/auto-start service exists. If the app
-   needs to survive a reboot or restart itself on crash unattended,
-   that infrastructure doesn't exist yet — someone needs to start it
-   manually, or a launchd plist needs to be written first (see `TODO.md`).
+8. **For unattended/event-day running**: as of 2026-09-13, a launchd
+   auto-restart supervisor exists — `deploy/com.eventcrowdmonitor.app.plist`
+   — with a full install/start/stop/troubleshoot runbook in
+   `DEPLOYMENT.md`. It has NOT yet been installed or verified live on any
+   machine (installing it is a standing config change on the actual
+   deployment box, left for a human to run deliberately, not automated).
+   If you move to a different Mac, every absolute path in the plist needs
+   updating first — see the comments in that file.
 
 ---
 
@@ -585,7 +595,7 @@ Steps, based on what worked on this MacBook:
 | 3 | Occupancy not persisted/replayed across a restart | **FIXED** 2026-09-12 (`d464df2`, broadened in `f4f2352`) — now resumes on every restart, resets only via Reset counts / Start new session. See §7 and `DECISIONS.md` D11. |
 | 4 | RTSP URL (incl. password) logged in plain text | **OPEN** — not yet masked, low urgency since `logs/` is gitignored |
 | 5 | No dedicated `/health` endpoint | **OPEN** — `/api/status` works as a substitute |
-| 6 | No automatic startup / crash supervisor | **OPEN** — not built |
+| 6 | No automatic startup / crash supervisor | **BUILT, NOT YET INSTALLED** 2026-09-13 — `deploy/com.eventcrowdmonitor.app.plist` (launchd LaunchAgent, `KeepAlive`+`RunAtLoad`) + `DEPLOYMENT.md` runbook added. Installing it (`launchctl bootstrap ...`) is a standing config change on the actual deployment machine, left for the user to run when ready — not yet loaded/verified live on any Mac. |
 | 7 | Multi-person tracking never observed live with real people | **UNTESTED** — proven on a still image only |
 | 8 | No deliberate real crossing test ever performed | **UNTESTED** — the counting formula is proven, a real walk-through is not |
 | 9 | Sparsh camera (client's actual hardware) currently unreachable | **UNRESOLVED** as of 2026-09-12 — network-level failure (ARP incomplete), cause not yet diagnosed |

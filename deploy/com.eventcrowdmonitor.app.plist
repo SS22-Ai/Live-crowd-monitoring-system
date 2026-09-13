@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd LaunchAgent for the Event Crowd Monitor.
+
+  Runs run.py under the project's own venv, restarts it automatically if
+  it ever exits for any reason (crash, kill, power blip + re-login), and
+  starts it automatically at login. See ../DEPLOYMENT.md for install/
+  start/stop instructions — do not just `kill` the process once this is
+  loaded, KeepAlive will immediately bring it back; use `launchctl
+  bootout` instead.
+
+  Paths below are absolute and specific to this machine. If this is ever
+  deployed to a different Mac, update every path (ProgramArguments,
+  WorkingDirectory, StandardOutPath, StandardErrorPath) to match that
+  machine's checkout location first.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.eventcrowdmonitor.app</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/srinivassivakumar/event_crowd_monitor/.venv/bin/python</string>
+        <string>/Users/srinivassivakumar/event_crowd_monitor/run.py</string>
+    </array>
+
+    <!-- db_path/log_path in config.yaml are relative paths, resolved against
+         the process's cwd, not the config file's location -- this must stay
+         the project root or a fresh empty DB/log gets created elsewhere. -->
+    <key>WorkingDirectory</key>
+    <string>/Users/srinivassivakumar/event_crowd_monitor</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>CROWD_MONITOR_CONFIG</key>
+        <string>config.local.yaml</string>
+    </dict>
+
+    <!-- Start as soon as this agent is loaded (and at every login, since
+         LaunchAgents reload at login automatically). -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Restart on ANY exit -- clean stop, crash, kill -9, anything.
+         Intentional stop must go through `launchctl bootout`, which
+         unloads the agent first so KeepAlive doesn't fight it. -->
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Minimum seconds between restart attempts, so a persistent crash
+         loops slowly instead of spinning the CPU / hammering the camera. -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <!-- Raw stdout/stderr -- catches uvicorn's own startup banner and any
+         traceback that happens before the app's own logging is configured
+         (e.g. a bad config file). The app's own logger still separately
+         writes to logs/app.log as configured in config.local.yaml. -->
+    <key>StandardOutPath</key>
+    <string>/Users/srinivassivakumar/event_crowd_monitor/logs/launchd-stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/srinivassivakumar/event_crowd_monitor/logs/launchd-stderr.log</string>
+</dict>
+</plist>

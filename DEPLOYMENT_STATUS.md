@@ -32,7 +32,7 @@ observed. Code that merely runs, or logic covered only by a plan, is `[~]`.
 
 ## ▶ NEXT 5 ACTIONS
 
-1. **(You)** From a real Terminal: `cd ~/Downloads/event_crowd_monitor && .venv/bin/python test_camera.py` → approve the macOS Camera prompt, confirm the preview shows your webcam, tell me the AVAILABLE indexes.
+1. **(You)** From a real Terminal: `cd ~/event_crowd_monitor && .venv/bin/python test_camera.py` → approve the macOS Camera prompt, confirm the preview shows your webcam, tell me the AVAILABLE indexes.
 2. **(You + me)** `.venv/bin/python run.py`, open http://localhost:8000, confirm `event_entrance` goes ONLINE with the annotated live feed (boxes, IDs, line). I'll watch `logs/app.log`.
 3. **(You + me)** Physical walk-through on Camera 1 (README §6): L→R = ENTRY, R→L = EXIT, hover = no count, two people = independent. I verify counts vs `logs/app.log` + `/api/events` + dashboard.
 4. **(me)** Decide + implement occupancy-on-restart behaviour and whether to add an occupancy table / combined dashboard total (currently derived-only, per-camera-only) — see DECISIONS D11/D12, TODO.

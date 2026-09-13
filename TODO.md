@@ -5,7 +5,9 @@ Phase numbers refer to DEPLOYMENT_STATUS.md.
 
 Legend: `[ ]` NOT STARTED · `[~]` IN PROGRESS · `[!]` BLOCKED · `[M]` MANUAL (needs you)
 
-_Last updated: 2026-09-08_
+_Last updated: 2026-09-13 (launchd supervisor + DEPLOYMENT.md items only —
+the rest of this file has not been re-audited against current code, see
+CLAUDE.md's warning not to trust it blindly)_
 
 ---
 
@@ -42,11 +44,21 @@ _Last updated: 2026-09-08_
       other (currently only unit-tested with a fake backend).  *(Phase 9)*
 - [ ] RTSP: point a `source` at `rtsp://…`; verify connect + reconnect on
       stream drop; calibrate `line_position` / `line_buffer` for the real view.  *(Phase 10)*
-- [ ] Deployment: launchd plist (or equivalent) for auto-start on the Mac mini;
-      supervised restart on crash.  *(Phase 11)*
-- [ ] Deployment: DB backup/rotation strategy for `data/crowd_monitor.db`.  *(Phase 11)*
-- [ ] Write `DEPLOYMENT.md` — target setup, headless/login-session note for
-      camera TCC, start/stop, log locations, upgrade steps.  *(Phase 11)*
+- [x] Deployment: launchd plist for auto-start + supervised restart on crash —
+      `deploy/com.eventcrowdmonitor.app.plist`, added 2026-09-13. Written and
+      `plutil`-validated but **not yet installed/loaded on any real
+      machine** — installing is a standing config change left for a human
+      to do deliberately (see `DEPLOYMENT.md` §1).  *(Phase 11)*
+- [x] Write `DEPLOYMENT.md` — install/start/stop/troubleshoot runbook, added
+      2026-09-13. Covers start/stop/log locations; does not yet cover
+      headless/login-session TCC nuances since real cameras are RTSP, not
+      the built-in webcam.  *(Phase 11)*
+- [ ] Deployment: DB backup/rotation strategy for `data/crowd_monitor.db`
+      (manual `cp` documented as a stopgap in `DEPLOYMENT.md` §6, not
+      automated).  *(Phase 11)*
+- [ ] Verify the launchd supervisor live: install it, kill -9 the process,
+      confirm it restarts within `ThrottleInterval`; verify RunAtLoad
+      survives an actual reboot + login.  *(Phase 11)*
 - [ ] Verify on the actual deployment box (Mac mini Apple Silicon), headless.  *(Phase 11)*
 
 ## CLEANUP / NICE-TO-HAVE
