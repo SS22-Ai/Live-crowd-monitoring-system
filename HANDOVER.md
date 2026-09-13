@@ -578,11 +578,14 @@ Steps, based on what worked on this MacBook:
 8. **For unattended/event-day running**: as of 2026-09-13, a launchd
    auto-restart supervisor exists — `deploy/com.eventcrowdmonitor.app.plist`
    — with a full install/start/stop/troubleshoot runbook in
-   `DEPLOYMENT.md`. It has NOT yet been installed or verified live on any
-   machine (installing it is a standing config change on the actual
-   deployment box, left for a human to run deliberately, not automated).
-   If you move to a different Mac, every absolute path in the plist needs
-   updating first — see the comments in that file.
+   `DEPLOYMENT.md`. **Installed and verified live on this MacBook
+   2026-09-13**: `kill -9`'d the running process, launchd respawned it with
+   a new pid in ~1s, and it correctly resumed the existing session (not a
+   fresh one). Still NOT verified: a real reboot + auto-login recovery (no
+   power cut has actually been tested), and it hasn't been run on any
+   other machine. Use `deploy/install.sh` (not a manual `cp`) if setting
+   this up on a different Mac — it substitutes the correct absolute paths
+   for you instead of requiring hand-edits.
 
 ---
 
@@ -595,7 +598,7 @@ Steps, based on what worked on this MacBook:
 | 3 | Occupancy not persisted/replayed across a restart | **FIXED** 2026-09-12 (`d464df2`, broadened in `f4f2352`) — now resumes on every restart, resets only via Reset counts / Start new session. See §7 and `DECISIONS.md` D11. |
 | 4 | RTSP URL (incl. password) logged in plain text | **OPEN** — not yet masked, low urgency since `logs/` is gitignored |
 | 5 | No dedicated `/health` endpoint | **OPEN** — `/api/status` works as a substitute |
-| 6 | No automatic startup / crash supervisor | **BUILT, NOT YET INSTALLED** 2026-09-13 — `deploy/com.eventcrowdmonitor.app.plist` (launchd LaunchAgent, `KeepAlive`+`RunAtLoad`) + `DEPLOYMENT.md` runbook added. Installing it (`launchctl bootstrap ...`) is a standing config change on the actual deployment machine, left for the user to run when ready — not yet loaded/verified live on any Mac. |
+| 6 | No automatic startup / crash supervisor | **FIXED** 2026-09-13 — `deploy/com.eventcrowdmonitor.app.plist` (launchd LaunchAgent, `KeepAlive`+`RunAtLoad`) + `DEPLOYMENT.md` runbook. Installed and live-tested same day: `kill -9` on the running process → respawned in ~1s with a new pid → correctly resumed the existing session. **Still open:** a real reboot/power-cut + auto-login recovery test has not been done, and it's only been run on this one Mac. |
 | 7 | Multi-person tracking never observed live with real people | **UNTESTED** — proven on a still image only |
 | 8 | No deliberate real crossing test ever performed | **UNTESTED** — the counting formula is proven, a real walk-through is not |
 | 9 | Sparsh camera (client's actual hardware) currently unreachable | **UNRESOLVED** as of 2026-09-12 — network-level failure (ARP incomplete), cause not yet diagnosed |

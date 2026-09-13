@@ -20,25 +20,26 @@ the *process* comes back, not the data.
    reachable (see `HANDOVER.md` §5, §12 for RTSP troubleshooting). The
    plist runs with `CROWD_MONITOR_CONFIG=config.local.yaml` — **not** the
    safe demo `config.yaml`.
-2. If this checkout ever moves to a different machine or path, edit every
-   absolute path in `deploy/com.eventcrowdmonitor.app.plist` first
-   (`ProgramArguments`, `WorkingDirectory`, `StandardOutPath`,
-   `StandardErrorPath`) — launchd does not know about `$HOME` or relative
-   paths.
-3. Install the agent:
+2. Install the agent:
    ```bash
-   cp deploy/com.eventcrowdmonitor.app.plist ~/Library/LaunchAgents/
-   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.eventcrowdmonitor.app.plist
+   ./deploy/install.sh
    ```
-   This starts the app immediately (`RunAtLoad`) and registers it to start
-   at every future login.
-4. **Strongly recommended for real power-loss recovery:** enable automatic
+   `deploy/com.eventcrowdmonitor.app.plist` is a **template** (paths are
+   placeholders, not real) — don't `cp` it directly or hand-edit its
+   paths. `install.sh` resolves this checkout's actual location, creates
+   `logs/` and `data/` first (launchd can't create a missing parent
+   directory for its own log files and will silently fail to start the
+   job if they're absent), fills in the template, and (re)installs the
+   agent. This starts the app immediately (`RunAtLoad`) and registers it
+   to start at every future login. Safe to re-run any time, including
+   after moving the checkout to a different path or machine.
+3. **Strongly recommended for real power-loss recovery:** enable automatic
    login for this user (System Settings → Users & Groups → Login Options →
    Automatic login). A `LaunchAgent` only starts once someone is logged in
    — after a real power cut, the Mac will sit at the login screen forever
    without this. This is a system security setting change, so make it
    yourself; it isn't something to script.
-5. Verify: open http://localhost:8000, confirm both cameras go ONLINE,
+4. Verify: open http://localhost:8000, confirm both cameras go ONLINE,
    confirm `tail -f logs/app.log` shows normal startup lines.
 
 ## 2. Day-of checklist
@@ -120,5 +121,11 @@ the auto-restart/auto-start behavior. You can still run it manually with
   to investigate afterward, not something to ignore because the supervisor
   papers over it.
 - **DB backup** — `data/crowd_monitor.db` is not backed up anywhere. If you
-  want a safety copy before the event, `cp data/crowd_monitor.db
-  data/crowd_monitor.db.bak` beforehand.
+  want a safety copy, **don't** `cp` it — the supervisor means the app is
+  now almost always running and writing to it, and a raw filesystem copy
+  of a live SQLite file can land mid-write and come out corrupted. Use
+  SQLite's own online-safe backup command instead, which is consistent
+  even while the app keeps writing:
+  ```bash
+  sqlite3 data/crowd_monitor.db ".backup data/crowd_monitor.db.bak"
+  ```

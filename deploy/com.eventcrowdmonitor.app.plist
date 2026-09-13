@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  launchd LaunchAgent for the Event Crowd Monitor.
+  launchd LaunchAgent TEMPLATE for the Event Crowd Monitor.
 
   Runs run.py under the project's own venv, restarts it automatically if
   it ever exits for any reason (crash, kill, power blip + re-login), and
@@ -10,10 +10,12 @@
   loaded, KeepAlive will immediately bring it back; use `launchctl
   bootout` instead.
 
-  Paths below are absolute and specific to this machine. If this is ever
-  deployed to a different Mac, update every path (ProgramArguments,
-  WorkingDirectory, StandardOutPath, StandardErrorPath) to match that
-  machine's checkout location first.
+  This is a TEMPLATE, not the installed file: __PROJECT_ROOT__ below is a
+  placeholder, not a real path. Do not hand-edit paths or `cp` this file
+  directly into ~/Library/LaunchAgents — run `deploy/install.sh` instead,
+  which fills in the actual project location, creates logs/data first,
+  and (re)installs the agent. This lets the same template work unchanged
+  on any machine.
 -->
 <plist version="1.0">
 <dict>
@@ -22,15 +24,15 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/srinivassivakumar/event_crowd_monitor/.venv/bin/python</string>
-        <string>/Users/srinivassivakumar/event_crowd_monitor/run.py</string>
+        <string>__PROJECT_ROOT__/.venv/bin/python</string>
+        <string>__PROJECT_ROOT__/run.py</string>
     </array>
 
     <!-- db_path/log_path in config.yaml are relative paths, resolved against
          the process's cwd, not the config file's location -- this must stay
          the project root or a fresh empty DB/log gets created elsewhere. -->
     <key>WorkingDirectory</key>
-    <string>/Users/srinivassivakumar/event_crowd_monitor</string>
+    <string>__PROJECT_ROOT__</string>
 
     <key>EnvironmentVariables</key>
     <dict>
@@ -57,11 +59,14 @@
     <!-- Raw stdout/stderr -- catches uvicorn's own startup banner and any
          traceback that happens before the app's own logging is configured
          (e.g. a bad config file). The app's own logger still separately
-         writes to logs/app.log as configured in config.local.yaml. -->
+         writes to logs/app.log as configured in config.local.yaml.
+         install.sh creates __PROJECT_ROOT__/logs before installing this,
+         since launchd cannot create a missing parent directory itself and
+         will silently fail to spawn the job if it's absent. -->
     <key>StandardOutPath</key>
-    <string>/Users/srinivassivakumar/event_crowd_monitor/logs/launchd-stdout.log</string>
+    <string>__PROJECT_ROOT__/logs/launchd-stdout.log</string>
 
     <key>StandardErrorPath</key>
-    <string>/Users/srinivassivakumar/event_crowd_monitor/logs/launchd-stderr.log</string>
+    <string>__PROJECT_ROOT__/logs/launchd-stderr.log</string>
 </dict>
 </plist>
